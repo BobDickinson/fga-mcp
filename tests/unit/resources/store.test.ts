@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as storeResources from "../../../src/resources/handlers/store.js";
-import { createMockContext } from "../../helpers/mock-client.js";
+import { createMockContext, createOfflineContext } from "../../helpers/mock-client.js";
 import { clearOpenFgaEnv, setOnlineWritableMode } from "../../helpers/env.js";
 
 afterEach(() => {
@@ -70,27 +70,21 @@ describe("listStoreModels resource", () => {
 describe("offline mode behavior", () => {
   it("prevents listStores in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { listStores: vi.fn() };
-    const result = await storeResources.listStores(createMockContext(client));
+    const result = await storeResources.listStores(createOfflineContext());
     expect(result).toEqual({
-      error: "❌ Listing stores requires a live OpenFGA instance. Please configure OPENFGA_MCP_API_URL to enable administrative features.",
+      error: "❌ Listing stores requires a live OpenFGA instance. Please configure OPENFGA_MCP_API_URL or an FGA config file to enable administrative features.",
     });
-    expect(client.listStores).not.toHaveBeenCalled();
   });
 
   it("prevents getStore in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { getStore: vi.fn() };
-    const result = await storeResources.getStore(createMockContext(client), "test-store-id");
+    const result = await storeResources.getStore(createOfflineContext(), "test-store-id");
     expect(result.error).toContain("Fetching store details requires a live OpenFGA instance");
-    expect(client.getStore).not.toHaveBeenCalled();
   });
 
   it("prevents listStoreModels in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { readAuthorizationModels: vi.fn() };
-    const result = await storeResources.listStoreModels(createMockContext(client), "test-store-id");
+    const result = await storeResources.listStoreModels(createOfflineContext(), "test-store-id");
     expect(result.error).toContain("Listing store models requires a live OpenFGA instance");
-    expect(client.readAuthorizationModels).not.toHaveBeenCalled();
   });
 });

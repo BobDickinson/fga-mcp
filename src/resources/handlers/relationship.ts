@@ -10,7 +10,7 @@ export async function checkPermission(
   object: string,
   modelId = "",
 ): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Checking permission");
+  const guard = checkOfflineModeResource(ctx, "Checking permission");
   if (guard) return guard;
 
   try {
@@ -30,7 +30,7 @@ export async function expandRelationships(
   object: string,
   relation: string,
 ): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Expanding relationships");
+  const guard = checkOfflineModeResource(ctx, "Expanding relationships");
   if (guard) return guard;
 
   try {
@@ -43,7 +43,7 @@ export async function expandRelationships(
 }
 
 export async function listObjects(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Listing objects");
+  const guard = checkOfflineModeResource(ctx, "Listing objects");
   if (guard) return guard;
 
   try {
@@ -55,7 +55,7 @@ export async function listObjects(ctx: ServerContext, storeId: string): Promise<
 }
 
 export async function listUsers(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Listing users");
+  const guard = checkOfflineModeResource(ctx, "Listing users");
   if (guard) return guard;
 
   try {
@@ -67,7 +67,7 @@ export async function listUsers(ctx: ServerContext, storeId: string): Promise<Re
 }
 
 export async function listRelationships(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Listing relationships");
+  const guard = checkOfflineModeResource(ctx, "Listing relationships");
   if (guard) return guard;
 
   try {

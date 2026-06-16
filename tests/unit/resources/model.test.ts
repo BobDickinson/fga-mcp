@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as modelResources from "../../../src/resources/handlers/model.js";
-import { createMockContext } from "../../helpers/mock-client.js";
+import { createMockContext, createOfflineContext } from "../../helpers/mock-client.js";
 import { clearOpenFgaEnv, setOnlineWritableMode } from "../../helpers/env.js";
 
 afterEach(() => {
@@ -63,15 +63,13 @@ describe("getLatestModel resource", () => {
 describe("offline mode behavior", () => {
   it("prevents getModel in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { readAuthorizationModel: vi.fn() };
-    const result = await modelResources.getModel(createMockContext(client), "test-store-id", "test-model-id");
+    const result = await modelResources.getModel(createOfflineContext(), "test-store-id", "test-model-id");
     expect(result.error).toContain("Getting model details requires a live OpenFGA instance");
   });
 
   it("prevents getLatestModel in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { readAuthorizationModels: vi.fn() };
-    const result = await modelResources.getLatestModel(createMockContext(client), "test-store-id");
+    const result = await modelResources.getLatestModel(createOfflineContext(), "test-store-id");
     expect(result.error).toContain("Getting latest model requires a live OpenFGA instance");
   });
 });

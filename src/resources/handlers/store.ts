@@ -3,7 +3,7 @@ import { requireClient, type ServerContext } from "../../client.js";
 import { errorMessage } from "./utils.js";
 
 export async function listStores(ctx: ServerContext): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Listing stores");
+  const guard = checkOfflineModeResource(ctx, "Listing stores");
   if (guard) return guard;
 
   try {
@@ -22,7 +22,7 @@ export async function listStores(ctx: ServerContext): Promise<Record<string, unk
 }
 
 export async function getStore(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Fetching store details");
+  const guard = checkOfflineModeResource(ctx, "Fetching store details");
   if (guard) return guard;
 
   try {
@@ -40,7 +40,7 @@ export async function getStore(ctx: ServerContext, storeId: string): Promise<Rec
 }
 
 export async function listStoreModels(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Listing store models");
+  const guard = checkOfflineModeResource(ctx, "Listing store models");
   if (guard) return guard;
 
   try {

@@ -119,14 +119,10 @@ type document
     setEnv("OPENFGA_MCP_API_WRITEABLE", "false");
 
     const grantResult = await relationshipHandlers.grantPermission(ctx(), store, model, "user:test", "reader", "document:test");
-    expect(grantResult).toBe(
-      "❌ Write operations are disabled for safety. To enable grant permissions, set OPENFGA_MCP_API_WRITEABLE=true.",
-    );
+    expect(grantResult).toContain("Write operations are disabled");
 
     const revokeResult = await relationshipHandlers.revokePermission(ctx(), store, model, "user:test", "reader", "document:test");
-    expect(revokeResult).toBe(
-      "❌ Write operations are disabled for safety. To enable revoke permissions, set OPENFGA_MCP_API_WRITEABLE=true.",
-    );
+    expect(revokeResult).toContain("Write operations are disabled");
 
     const checkResult = await relationshipHandlers.checkPermission(ctx(), store, model, "user:test", "reader", "document:test");
     expect(checkResult).toBe("❌ Permission denied");
@@ -159,7 +155,7 @@ type document
       "document:test",
     );
     expect(restrictedStoreCheck).toBe(
-      `❌ The MCP server is configured in restricted mode. You cannot query stores other than ${allowedStoreId} in this mode.`,
+      `❌ Restricted: store must be ${allowedStoreId} on this server.`,
     );
 
     const restrictedModelCheck = await relationshipHandlers.checkPermission(
@@ -171,7 +167,7 @@ type document
       "document:test",
     );
     expect(restrictedModelCheck).toBe(
-      `❌ The MCP server is configured in restricted mode. You cannot query using authorization models other than ${allowedModelId} in this mode.`,
+      `❌ Restricted: model must be ${allowedModelId} on this server.`,
     );
 
     await deleteTestStore(restrictedStoreId);

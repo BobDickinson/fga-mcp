@@ -7,199 +7,224 @@ import {
   checkRestrictedModePrompt,
   checkRestrictedModeResource,
   checkWritePermission,
+  isRestrictedMode,
+  isWriteEnabled,
   promptErrorResponse,
   promptUserMessage,
 } from "../../src/guards.js";
-import { clearOpenFgaEnv, setEnv, setOnlineWritableMode } from "../helpers/env.js";
+import { createMockContext, createOfflineContext } from "../helpers/mock-client.js";
+import { clearOpenFgaEnv, setEnv } from "../helpers/env.js";
+import type { ServerPolicy } from "../../src/server-pool.js";
 
 afterEach(() => {
   clearOpenFgaEnv();
 });
 
+const openPolicy: ServerPolicy = { restrict: false, writeable: true };
+const readOnlyPolicy: ServerPolicy = { restrict: false, writeable: false };
+const restrictedStorePolicy: ServerPolicy = {
+  restrict: true,
+  writeable: false,
+  defaultStore: "allowed-store",
+};
+const restrictedModelPolicy: ServerPolicy = {
+  restrict: true,
+  writeable: false,
+  defaultModel: "allowed-model",
+};
+const restrictedBothPolicy: ServerPolicy = {
+  restrict: true,
+  writeable: false,
+  defaultStore: "allowed-store",
+  defaultModel: "allowed-model",
+};
+
 describe("checkOfflineMode", () => {
   it("returns null when online", () => {
-    setOnlineWritableMode();
-    expect(checkOfflineMode("Test Operation")).toBeNull();
+    expect(checkOfflineMode(createMockContext({}), "Test Operation")).toBeNull();
   });
 
   it("returns error when offline", () => {
-    clearOpenFgaEnv();
-    const result = checkOfflineMode("Test Operation");
+    const result = checkOfflineMode(createOfflineContext(), "Test Operation");
     expect(result).toContain("Test Operation");
     expect(result).toContain("OPENFGA_MCP_API_URL");
+    expect(result).toContain("FGA config file");
   });
 
   it("returns error with custom operation name", () => {
-    clearOpenFgaEnv();
-    const result = checkOfflineMode("Fetching authorization models");
+    const result = checkOfflineMode(createOfflineContext(), "Fetching authorization models");
     expect(result).toContain("Fetching authorization models");
     expect(result).toContain("requires a live OpenFGA instance");
-  });
-
-  it("returns null when token is set without URL", () => {
-    clearOpenFgaEnv();
-    setEnv("OPENFGA_MCP_API_TOKEN", "some-token");
-    expect(checkOfflineMode("Operation")).toBeNull();
-  });
-
-  it("returns null when client ID is set without URL", () => {
-    clearOpenFgaEnv();
-    setEnv("OPENFGA_MCP_API_CLIENT_ID", "client-123");
-    expect(checkOfflineMode("Operation")).toBeNull();
   });
 });
 
 describe("checkWritePermission", () => {
-  it("blocks when write disabled", () => {
-    setOnlineWritableMode();
-    setEnv("OPENFGA_MCP_API_WRITEABLE", "false");
-    expect(checkWritePermission("create stores")).toContain("Write operations are disabled");
+  it("blocks when write disabled on server policy", () => {
+    expect(checkWritePermission(readOnlyPolicy, "create stores")).toContain("Write operations are disabled");
+  });
+
+  it("includes operation name and FGA config hint", () => {
+    const result = checkWritePermission(readOnlyPolicy, "grant permissions");
+    expect(result).toContain("grant permissions");
+    expect(result).toContain("writeable: true");
+  });
+
+  it("allows when writeable", () => {
+    expect(checkWritePermission(openPolicy, "create stores")).toBeNull();
   });
 });
 
 describe("checkRestrictedMode", () => {
-  it("returns null when restricted mode is disabled", () => {
-    clearOpenFgaEnv();
-    expect(checkRestrictedMode("any-store", "any-model")).toBeNull();
+  it("returns null when restrict is disabled", () => {
+    expect(checkRestrictedMode(openPolicy, "any-store", "any-model")).toBeNull();
   });
 
-  it("returns null when restricted mode is explicitly false", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "false");
-    expect(checkRestrictedMode("store-123", "model-456")).toBeNull();
-  });
-
-  it('returns null for restrict values other than "true"', () => {
-    for (const value of ["yes", "1", "TRUE"]) {
-      setEnv("OPENFGA_MCP_API_RESTRICT", value);
-      expect(checkRestrictedMode("store", "model")).toBeNull();
-    }
-  });
-
-  it("blocks non-allowed store", () => {
-    setOnlineWritableMode();
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
-    expect(checkRestrictedMode("other-store")).toContain("allowed-store");
+  it("blocks non-allowed store when restrict pins store", () => {
+    expect(checkRestrictedMode(restrictedStorePolicy, "other-store")).toContain("allowed-store");
+    expect(checkRestrictedMode(restrictedStorePolicy, "other-store")).toContain("Restricted: store must be");
   });
 
   it("returns null when querying the configured store", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
-    expect(checkRestrictedMode("allowed-store", null)).toBeNull();
+    expect(checkRestrictedMode(restrictedStorePolicy, "allowed-store", null)).toBeNull();
   });
 
-  it("returns null when no store restriction is configured", () => {
-    clearOpenFgaEnv();
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    expect(checkRestrictedMode("any-store", null)).toBeNull();
+  it("returns null when no store pin is configured", () => {
+    const policy: ServerPolicy = { restrict: true, writeable: false };
+    expect(checkRestrictedMode(policy, "any-store", null)).toBeNull();
   });
 
   it("returns null when store ID is null", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "restricted-store");
-    expect(checkRestrictedMode(null, null)).toBeNull();
+    expect(checkRestrictedMode(restrictedStorePolicy, null, null)).toBeNull();
   });
 
-  it("blocks non-allowed model", () => {
-    setOnlineWritableMode();
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_MODEL", "allowed-model");
-    expect(checkRestrictedMode("store", "other-model")).toContain("allowed-model");
+  it("blocks non-allowed model when model pin configured", () => {
+    expect(checkRestrictedMode(restrictedModelPolicy, "store", "other-model")).toContain("allowed-model");
+    expect(checkRestrictedMode(restrictedModelPolicy, "store", "other-model")).toContain("Restricted: model must be");
   });
 
   it("returns null when querying the configured model", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_MODEL", "allowed-model");
-    expect(checkRestrictedMode(null, "allowed-model")).toBeNull();
+    expect(checkRestrictedMode(restrictedModelPolicy, null, "allowed-model")).toBeNull();
   });
 
-  it("returns null when no model restriction is configured", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    expect(checkRestrictedMode(null, "any-model")).toBeNull();
+  it("returns null when no model pin is configured", () => {
+    const policy: ServerPolicy = { restrict: true, writeable: false };
+    expect(checkRestrictedMode(policy, null, "any-model")).toBeNull();
   });
 
   it("returns null when model ID is null", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_MODEL", "restricted-model");
-    expect(checkRestrictedMode(null, null)).toBeNull();
+    expect(checkRestrictedMode(restrictedModelPolicy, null, null)).toBeNull();
   });
 
   it("returns null when both store and model match", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
-    setEnv("OPENFGA_MCP_API_MODEL", "allowed-model");
-    expect(checkRestrictedMode("allowed-store", "allowed-model")).toBeNull();
+    expect(checkRestrictedMode(restrictedBothPolicy, "allowed-store", "allowed-model")).toBeNull();
   });
 
   it("returns store error first when both do not match", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
-    setEnv("OPENFGA_MCP_API_MODEL", "allowed-model");
-    const result = checkRestrictedMode("wrong-store", "wrong-model");
+    const result = checkRestrictedMode(restrictedBothPolicy, "wrong-store", "wrong-model");
     expect(result).toContain("allowed-store");
     expect(result).not.toContain("allowed-model");
   });
 
-  it("allows partial restrictions", () => {
-    clearOpenFgaEnv();
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
-    expect(checkRestrictedMode("allowed-store", "any-model")).toBeNull();
+  it("allows partial restrictions — store pin only", () => {
+    expect(checkRestrictedMode(restrictedStorePolicy, "allowed-store", "any-model")).toBeNull();
+  });
 
-    clearOpenFgaEnv();
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_MODEL", "allowed-model");
-    expect(checkRestrictedMode("any-store", "allowed-model")).toBeNull();
+  it("allows partial restrictions — model pin only", () => {
+    expect(checkRestrictedMode(restrictedModelPolicy, "any-store", "allowed-model")).toBeNull();
   });
 
   it("handles special characters in store names", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "store-with-special_chars.123");
-    expect(checkRestrictedMode("store-with-special_chars.123", null)).toBeNull();
-    expect(checkRestrictedMode("different-store", null)).toContain("store-with-special_chars.123");
+    const policy: ServerPolicy = {
+      restrict: true,
+      writeable: false,
+      defaultStore: "store-with-special_chars.123",
+    };
+    expect(checkRestrictedMode(policy, "store-with-special_chars.123", null)).toBeNull();
+    expect(checkRestrictedMode(policy, "different-store", null)).toContain("store-with-special_chars.123");
   });
 
   it("handles case-sensitive store comparisons", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "MyStore");
-    expect(checkRestrictedMode("mystore", null)).toContain("MyStore");
-    expect(checkRestrictedMode("MyStore", null)).toBeNull();
+    const policy: ServerPolicy = { restrict: true, writeable: false, defaultStore: "MyStore" };
+    expect(checkRestrictedMode(policy, "mystore", null)).toContain("MyStore");
+    expect(checkRestrictedMode(policy, "MyStore", null)).toBeNull();
   });
 
-  it("handles whitespace in store configuration", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", " ");
-    expect(checkRestrictedMode("any-store", null)).toBeNull();
+  it("treats whitespace store pin as a literal pin", () => {
+    const policy: ServerPolicy = { restrict: true, writeable: false, defaultStore: " " };
+    expect(checkRestrictedMode(policy, "any-store", null)).toContain("Restricted: store must be");
   });
 });
 
 describe("checkRestrictedModeForWrites", () => {
-  it("blocks writes in restricted mode", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    expect(checkRestrictedModeForWrites("create stores")).toContain("restricted mode");
+  it("does not block writes (decoupled from restrict)", () => {
+    expect(checkRestrictedModeForWrites("create stores")).toBeNull();
   });
 });
 
 describe("resource guard variants", () => {
+  it("returns null when online", () => {
+    expect(checkOfflineModeResource(createMockContext({}), "Listing stores")).toBeNull();
+  });
+
   it("returns error object for offline resource", () => {
-    clearOpenFgaEnv();
-    const result = checkOfflineModeResource("Listing stores");
+    const result = checkOfflineModeResource(createOfflineContext(), "Listing stores");
     expect(result).toEqual({ error: expect.stringContaining("Listing stores") });
   });
 
+  it("returns null for allowed store on restricted resource", () => {
+    expect(checkRestrictedModeResource(restrictedStorePolicy, "allowed-store")).toBeNull();
+  });
+
   it("returns error object for restricted resource", () => {
-    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
-    const result = checkRestrictedModeResource("other-store");
+    const result = checkRestrictedModeResource(restrictedStorePolicy, "other-store");
     expect(result?.error).toContain("allowed-store");
   });
 });
 
 describe("prompt guard variants", () => {
-  it("blocks prompt for wrong store in restricted mode", () => {
+  it("blocks prompt for wrong store via explicit policy", () => {
+    expect(checkRestrictedModePrompt("other-store", null, restrictedStorePolicy)).toContain("access guidance");
+  });
+
+  it("allows prompt for configured store via explicit policy", () => {
+    expect(checkRestrictedModePrompt("allowed-store", null, restrictedStorePolicy)).toBeNull();
+  });
+
+  it("blocks prompt for wrong model via explicit policy", () => {
+    expect(checkRestrictedModePrompt(null, "other-model", restrictedModelPolicy)).toContain("authorization models");
+  });
+
+  it("blocks prompt for wrong store in restricted mode via env legacy", () => {
     setEnv("OPENFGA_MCP_API_RESTRICT", "true");
     setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
     expect(checkRestrictedModePrompt("other-store")).toContain("access guidance");
+  });
+
+  it("allows prompt when legacy restrict env is not true", () => {
+    for (const value of ["yes", "1", "TRUE", "false"]) {
+      setEnv("OPENFGA_MCP_API_RESTRICT", value);
+      setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
+      expect(checkRestrictedModePrompt("other-store")).toBeNull();
+    }
+  });
+
+  it("returns null when legacy restrict is on but no store pin configured", () => {
+    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
+    expect(checkRestrictedModePrompt("any-store")).toBeNull();
+  });
+});
+
+describe("legacy env helpers", () => {
+  it("isRestrictedMode reads OPENFGA_MCP_API_RESTRICT", () => {
+    expect(isRestrictedMode()).toBe(false);
+    setEnv("OPENFGA_MCP_API_RESTRICT", "true");
+    expect(isRestrictedMode()).toBe(true);
+  });
+
+  it("isWriteEnabled reads OPENFGA_MCP_API_WRITEABLE", () => {
+    expect(isWriteEnabled()).toBe(false);
+    setEnv("OPENFGA_MCP_API_WRITEABLE", "true");
+    expect(isWriteEnabled()).toBe(true);
   });
 });
 
@@ -214,5 +239,10 @@ describe("prompt helpers", () => {
   it("builds error response", () => {
     const result = promptErrorResponse("error text");
     expect(result.messages[0].content.text).toBe("error text");
+  });
+
+  it("uses fallback text for null error", () => {
+    const result = promptErrorResponse(null);
+    expect(result.messages[0].content.text).toBe("Unknown error");
   });
 });

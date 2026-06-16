@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as relationshipResources from "../../../src/resources/handlers/relationship.js";
-import { createMockContext } from "../../helpers/mock-client.js";
+import { createMockContext, createOfflineContext } from "../../helpers/mock-client.js";
 import { clearOpenFgaEnv, setOnlineWritableMode } from "../../helpers/env.js";
 
 afterEach(() => {
@@ -98,9 +98,8 @@ describe("expandRelationships resource", () => {
 describe("offline mode behavior", () => {
   it("prevents checkPermission in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { check: vi.fn() };
     const result = await relationshipResources.checkPermission(
-      createMockContext(client),
+      createOfflineContext(),
       "test-store-id",
       "user:123",
       "reader",
@@ -111,9 +110,8 @@ describe("offline mode behavior", () => {
 
   it("prevents expandRelationships in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { expand: vi.fn() };
     const result = await relationshipResources.expandRelationships(
-      createMockContext(client),
+      createOfflineContext(),
       "test-store-id",
       "document:456",
       "reader",
@@ -123,22 +121,19 @@ describe("offline mode behavior", () => {
 
   it("prevents listObjects in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { read: vi.fn() };
-    const result = await relationshipResources.listObjects(createMockContext(client), "test-store-id");
+    const result = await relationshipResources.listObjects(createOfflineContext(), "test-store-id");
     expect(result.error).toContain("Listing objects requires a live OpenFGA instance");
   });
 
   it("prevents listRelationships in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { read: vi.fn() };
-    const result = await relationshipResources.listRelationships(createMockContext(client), "test-store-id");
+    const result = await relationshipResources.listRelationships(createOfflineContext(), "test-store-id");
     expect(result.error).toContain("Listing relationships requires a live OpenFGA instance");
   });
 
   it("prevents listUsers in offline mode", async () => {
     clearOpenFgaEnv();
-    const client = { read: vi.fn() };
-    const result = await relationshipResources.listUsers(createMockContext(client), "test-store-id");
+    const result = await relationshipResources.listUsers(createOfflineContext(), "test-store-id");
     expect(result.error).toContain("Listing users requires a live OpenFGA instance");
   });
 });

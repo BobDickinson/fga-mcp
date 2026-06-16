@@ -134,9 +134,7 @@ type document
 type user`;
 
     const result = await modelHandlers.createModel(ctx(), dsl, storeId);
-    expect(result).toBe(
-      "❌ Write operations are disabled for safety. To enable create authorization models, set OPENFGA_MCP_API_WRITEABLE=true.",
-    );
+    expect(result).toContain("Write operations are disabled");
   });
 
   it("respects restricted mode for model access", async () => {
@@ -152,7 +150,7 @@ type user`;
 
     const restrictedResult = await modelHandlers.getModel(ctx(), store, restrictedModelId);
     expect(restrictedResult).toBe(
-      `❌ The MCP server is configured in restricted mode. You cannot query using authorization models other than ${allowedModelId} in this mode.`,
+      `❌ Restricted: model must be ${allowedModelId} on this server.`,
     );
   });
 

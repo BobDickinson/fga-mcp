@@ -1,3 +1,5 @@
+import { hasActiveFgaConnections } from "./server-pool.js";
+
 export function getConfiguredString(env: string, defaultValue = ""): string {
   const value = process.env[env];
 
@@ -39,6 +41,8 @@ export function getConfiguredBool(env: string, defaultValue = false): boolean {
 }
 
 export function isOfflineMode(): boolean {
+  if (hasActiveFgaConnections()) return false;
+
   const apiUrl = getConfiguredString("OPENFGA_MCP_API_URL", "");
   const hasToken = getConfiguredString("OPENFGA_MCP_API_TOKEN", "") !== "";
   const hasClientId = getConfiguredString("OPENFGA_MCP_API_CLIENT_ID", "") !== "";

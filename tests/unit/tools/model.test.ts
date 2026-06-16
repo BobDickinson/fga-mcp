@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as modelHandlers from "../../../src/tools/handlers/model.js";
 import { parseDsl } from "../../../src/dsl.js";
-import { createMockContext } from "../../helpers/mock-client.js";
+import { createMockContext, createOfflineContext } from "../../helpers/mock-client.js";
 import { clearOpenFgaEnv, setOnlineWritableMode, setEnv } from "../../helpers/env.js";
 
 const VALID_DSL = `model
@@ -34,12 +34,12 @@ describe("createModel", () => {
     expect(result).toContain("❌ Failed to create authorization model");
   });
 
-  it("prevents creation in restricted mode", async () => {
+  it("allows creation when restrict is on without store pin but writeable", async () => {
     setOnlineWritableMode();
     setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    const client = { writeAuthorizationModel: vi.fn() };
+    const client = { writeAuthorizationModel: vi.fn().mockResolvedValue({ authorization_model_id: "m1" }) };
     const result = await modelHandlers.createModel(createMockContext(client), VALID_DSL, "store-123");
-    expect(result).toContain("restricted mode");
+    expect(result).toContain("✅ Successfully created");
   });
 
   it("handles model creation failure after successful DSL parsing", async () => {
@@ -55,9 +55,7 @@ describe("createModel", () => {
     setEnv("OPENFGA_MCP_API_WRITEABLE", "false");
     const client = { writeAuthorizationModel: vi.fn() };
     const result = await modelHandlers.createModel(createMockContext(client), VALID_DSL, "store-123");
-    expect(result).toBe(
-      "❌ Write operations are disabled for safety. To enable create authorization models, set OPENFGA_MCP_API_WRITEABLE=true.",
-    );
+    expect(result).toContain("Write operations are disabled");
     expect(client.writeAuthorizationModel).not.toHaveBeenCalled();
   });
 
@@ -67,7 +65,7 @@ describe("createModel", () => {
     setEnv("OPENFGA_MCP_API_STORE", "allowed-store");
     const client = { writeAuthorizationModel: vi.fn() };
     const result = await modelHandlers.createModel(createMockContext(client), VALID_DSL, "different-store");
-    expect(result).toContain("restricted mode");
+    expect(result).toContain("Restricted: store must be");
     expect(client.writeAuthorizationModel).not.toHaveBeenCalled();
   });
 });
@@ -193,9 +191,9 @@ describe("verifyModel", () => {
     expect(result).toContain("❌ Failed to verify authorization model");
   });
 
-  it("blocks verification in offline mode", async () => {
+  it("verifies DSL in offline mode", async () => {
     clearOpenFgaEnv();
-    const result = await modelHandlers.verifyModel(createMockContext({}), VALID_DSL);
-    expect(result).toContain("Verifying authorization model requires a live OpenFGA instance");
+    const result = await modelHandlers.verifyModel(createOfflineContext(), VALID_DSL);
+    expect(result).toContain("✅ Successfully verified");
   });
 });

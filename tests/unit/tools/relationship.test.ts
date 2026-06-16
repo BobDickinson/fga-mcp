@@ -140,9 +140,7 @@ describe("revokePermission", () => {
       "writer",
       OBJECT,
     );
-    expect(result).toBe(
-      "❌ Write operations are disabled for safety. To enable revoke permissions, set OPENFGA_MCP_API_WRITEABLE=true.",
-    );
+    expect(result).toContain("Write operations are disabled");
     expect(client.deleteTuples).not.toHaveBeenCalled();
   });
 });

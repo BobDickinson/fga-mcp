@@ -1,6 +1,7 @@
 import { isOfflineMode, isRestrictedMode } from "../config.js";
 import { getDocumentationIndex } from "../documentation/index.js";
 import type { ServerContext } from "../client.js";
+import { defaultClient } from "../client.js";
 
 export function filterCompletions(completions: string[], currentValue: string): string[] {
   if (!currentValue) return completions;
@@ -8,10 +9,11 @@ export function filterCompletions(completions: string[], currentValue: string): 
   return completions.filter((c) => c.toLowerCase().startsWith(lower));
 }
 
-export async function completeStoreIds(ctx: ServerContext, value: string): Promise<string[]> {
-  if (isOfflineMode() || !ctx.client) return [];
+export async function completeStoreIds(ctx: ServerContext, value: string, server?: string): Promise<string[]> {
+  const client = defaultClient(ctx);
+  if (isOfflineMode() || !client) return [];
   try {
-    const response = await ctx.client.listStores();
+    const response = await client.listStores();
     const ids = (response.stores ?? []).map((s) => s.id).filter(Boolean) as string[];
     return filterCompletions(ids, value);
   } catch {
@@ -20,10 +22,11 @@ export async function completeStoreIds(ctx: ServerContext, value: string): Promi
 }
 
 export async function completeModelIds(ctx: ServerContext, storeId: string, value: string): Promise<string[]> {
-  if (isOfflineMode() || !ctx.client || !storeId) return filterCompletions(["latest"], value);
+  const client = defaultClient(ctx);
+  if (isOfflineMode() || !client || !storeId) return filterCompletions(["latest"], value);
   if (isRestrictedMode()) return [];
   try {
-    const response = await ctx.client.readAuthorizationModels({ storeId });
+    const response = await client.readAuthorizationModels({ storeId });
     const ids = (response.authorization_models ?? []).map((m) => m.id).filter(Boolean) as string[];
     ids.unshift("latest");
     return filterCompletions([...new Set(ids)], value);
@@ -34,9 +37,10 @@ export async function completeModelIds(ctx: ServerContext, storeId: string, valu
 
 export async function completeRelations(ctx: ServerContext, storeId: string, value: string): Promise<string[]> {
   const common = ["viewer", "reader", "editor", "writer", "owner", "member", "admin"];
-  if (isOfflineMode() || !ctx.client || !storeId) return filterCompletions(common, value);
+  const client = defaultClient(ctx);
+  if (isOfflineMode() || !client || !storeId) return filterCompletions(common, value);
   try {
-    const response = await ctx.client.readAuthorizationModel({ storeId, authorizationModelId: "latest" });
+    const response = await client.readAuthorizationModel({ storeId, authorizationModelId: "latest" });
     const relations = new Set<string>();
     for (const typeDef of response.authorization_model?.type_definitions ?? []) {
       for (const relation of Object.keys(typeDef.relations ?? {})) relations.add(relation);
@@ -55,10 +59,11 @@ export async function completeFromTuples(
   value: string,
   fallback: string[],
 ): Promise<string[]> {
-  if (isOfflineMode() || !ctx.client || !storeId) return filterCompletions(fallback, value);
+  const client = defaultClient(ctx);
+  if (isOfflineMode() || !client || !storeId) return filterCompletions(fallback, value);
   if (isRestrictedMode()) return [];
   try {
-    const response = await ctx.client.read({}, { storeId, pageSize: 50 });
+    const response = await client.read({}, { storeId, pageSize: 50 });
     const values = new Set<string>();
     for (const tuple of response.tuples ?? []) {
       const key = tuple.key?.[field];

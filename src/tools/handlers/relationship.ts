@@ -1,9 +1,6 @@
-import {
-  checkOfflineMode,
-  checkRestrictedMode,
-  checkWritePermission,
-} from "../../guards.js";
-import { requireClient, type ServerContext } from "../../client.js";
+import { resolveAdminTarget, resolveTupleTarget } from "../../admin-context.js";
+import { checkOfflineMode, checkRestrictedMode, checkWritePermission } from "../../guards.js";
+import type { ServerContext } from "../../client.js";
 import { parseEntityString } from "../../dsl.js";
 
 function errorMessage(error: unknown): string {
@@ -12,19 +9,26 @@ function errorMessage(error: unknown): string {
 
 export async function checkPermission(
   ctx: ServerContext,
-  store: string,
-  model: string,
+  store: string | undefined,
+  model: string | undefined,
   user: string,
   relation: string,
   object: string,
+  server?: string,
 ): Promise<string> {
-  const guards = [checkOfflineMode("Checking permissions"), checkRestrictedMode(store, model)];
-  for (const g of guards) if (g) return g;
+  const offline = checkOfflineMode(ctx, "Checking permissions");
+  if (offline) return offline;
+
+  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  if (typeof resolved === "string") return resolved;
+
+  const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);
+  if (restrict) return restrict;
 
   try {
-    const response = await requireClient(ctx).check(
+    const response = await resolved.client.check(
       { user, relation, object },
-      { storeId: store, authorizationModelId: model },
+      { storeId: resolved.store!, authorizationModelId: resolved.model! },
     );
     return response.allowed ? "✅ Permission allowed" : "❌ Permission denied";
   } catch (e) {
@@ -34,21 +38,30 @@ export async function checkPermission(
 
 export async function grantPermission(
   ctx: ServerContext,
-  store: string,
-  model: string,
+  store: string | undefined,
+  model: string | undefined,
   user: string,
   relation: string,
   object: string,
+  server?: string,
 ): Promise<string> {
+  const offline = checkOfflineMode(ctx, "Granting permissions");
+  if (offline) return offline;
+
+  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  if (typeof resolved === "string") return resolved;
+
   const guards = [
-    checkOfflineMode("Granting permissions"),
-    checkWritePermission("grant permissions"),
-    checkRestrictedMode(store, model),
+    checkWritePermission(resolved.policy, "grant permissions"),
+    checkRestrictedMode(resolved.policy, resolved.store, resolved.model),
   ];
   for (const g of guards) if (g) return g;
 
   try {
-    await requireClient(ctx).writeTuples([{ user, relation, object }], { storeId: store, authorizationModelId: model });
+    await resolved.client.writeTuples([{ user, relation, object }], {
+      storeId: resolved.store!,
+      authorizationModelId: resolved.model!,
+    });
     return "✅ Permission granted successfully";
   } catch (e) {
     return `❌ Failed to grant permission! Error: ${errorMessage(e)}`;
@@ -57,21 +70,30 @@ export async function grantPermission(
 
 export async function revokePermission(
   ctx: ServerContext,
-  store: string,
-  model: string,
+  store: string | undefined,
+  model: string | undefined,
   user: string,
   relation: string,
   object: string,
+  server?: string,
 ): Promise<string> {
+  const offline = checkOfflineMode(ctx, "Revoking permissions");
+  if (offline) return offline;
+
+  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  if (typeof resolved === "string") return resolved;
+
   const guards = [
-    checkOfflineMode("Revoking permissions"),
-    checkWritePermission("revoke permissions"),
-    checkRestrictedMode(store, model),
+    checkWritePermission(resolved.policy, "revoke permissions"),
+    checkRestrictedMode(resolved.policy, resolved.store, resolved.model),
   ];
   for (const g of guards) if (g) return g;
 
   try {
-    await requireClient(ctx).deleteTuples([{ user, relation, object }], { storeId: store, authorizationModelId: model });
+    await resolved.client.deleteTuples([{ user, relation, object }], {
+      storeId: resolved.store!,
+      authorizationModelId: resolved.model!,
+    });
     return "✅ Permission revoked successfully";
   } catch (e) {
     return `❌ Failed to revoke permission! Error: ${errorMessage(e)}`;
@@ -80,19 +102,26 @@ export async function revokePermission(
 
 export async function listObjects(
   ctx: ServerContext,
-  store: string,
-  model: string,
+  store: string | undefined,
+  model: string | undefined,
   type: string,
   user: string,
   relation: string,
+  server?: string,
 ): Promise<string | string[]> {
-  const guards = [checkOfflineMode("Listing objects"), checkRestrictedMode(store, model)];
-  for (const g of guards) if (g) return g;
+  const offline = checkOfflineMode(ctx, "Listing objects");
+  if (offline) return offline;
+
+  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  if (typeof resolved === "string") return resolved;
+
+  const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);
+  if (restrict) return restrict;
 
   try {
-    const response = await requireClient(ctx).listObjects(
+    const response = await resolved.client.listObjects(
       { user, relation, type },
-      { storeId: store, authorizationModelId: model },
+      { storeId: resolved.store!, authorizationModelId: resolved.model! },
     );
     return response.objects ?? [];
   } catch (e) {
@@ -102,18 +131,25 @@ export async function listObjects(
 
 export async function listUsers(
   ctx: ServerContext,
-  store: string,
-  model: string,
+  store: string | undefined,
+  model: string | undefined,
   object: string,
   relation: string,
+  server?: string,
 ): Promise<string | string[]> {
-  const guards = [checkOfflineMode("Listing users"), checkRestrictedMode(store, model)];
-  for (const g of guards) if (g) return g;
+  const offline = checkOfflineMode(ctx, "Listing users");
+  if (offline) return offline;
+
+  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  if (typeof resolved === "string") return resolved;
+
+  const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);
+  if (restrict) return restrict;
 
   try {
-    const response = await requireClient(ctx).listUsers(
+    const response = await resolved.client.listUsers(
       { object: parseEntityString(object), relation, user_filters: [{ type: "user" }] },
-      { storeId: store, authorizationModelId: model },
+      { storeId: resolved.store!, authorizationModelId: resolved.model! },
     );
     return (response.users ?? [])
       .map((u) => {

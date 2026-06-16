@@ -12,12 +12,14 @@ import {
   registerStoreResources,
 } from "./resources/index.js";
 import { registerDocumentationTools } from "./tools/documentation.js";
-import { registerModelTools, registerRelationshipTools, registerStoreTools } from "./tools/openfga.js";
+import { registerModelTools, registerRelationshipTools, registerServerManagementTools, registerStoreTools } from "./tools/openfga.js";
 
 export const SERVER_NAME = "OpenFGA MCP Server";
 export const SERVER_VERSION = "1.0.0";
 
 export const EXPECTED_TOOL_NAMES = [
+  "list_servers",
+  "set_default_server",
   "create_store",
   "delete_store",
   "get_store",
@@ -99,6 +101,7 @@ export function createMcpServer(): FastMCP {
 }
 
 export function registerMcpCapabilities(server: FastMCP, ctx: ServerContext): void {
+  registerServerManagementTools(server, ctx);
   registerStoreTools(server, ctx);
   registerRelationshipTools(server, ctx);
   registerModelTools(server, ctx);

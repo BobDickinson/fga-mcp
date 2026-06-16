@@ -81,7 +81,7 @@ describe("StoreTools Integration", () => {
   it("respects read-only mode", async () => {
     setEnv("OPENFGA_MCP_API_WRITEABLE", "false");
     const result = await storeHandlers.createStore(ctx(), "should-not-create");
-    expect(result).toBe("❌ Write operations are disabled for safety. To enable create stores, set OPENFGA_MCP_API_WRITEABLE=true.");
+    expect(result).toContain("Write operations are disabled");
   });
 
   it("respects restricted mode for store access", async () => {
@@ -95,7 +95,7 @@ describe("StoreTools Integration", () => {
     expect(allowedResult).toEqual(expect.objectContaining({ id: allowedStoreId }));
 
     const restrictedResult = await storeHandlers.getStore(ctx(), restrictedStoreId);
-    expect(restrictedResult).toBe(`❌ The MCP server is configured in restricted mode. You cannot query stores other than ${allowedStoreId} in this mode.`);
+    expect(restrictedResult).toBe(`❌ Restricted: store must be ${allowedStoreId} on this server.`);
 
     await deleteTestStore(allowedStoreId);
     await deleteTestStore(restrictedStoreId);

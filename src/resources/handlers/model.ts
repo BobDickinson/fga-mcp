@@ -3,7 +3,7 @@ import { requireClient, type ServerContext } from "../../client.js";
 import { errorMessage, formatModelData } from "./utils.js";
 
 export async function getLatestModel(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Getting latest model");
+  const guard = checkOfflineModeResource(ctx, "Getting latest model");
   if (guard) return guard;
 
   try {
@@ -17,7 +17,7 @@ export async function getLatestModel(ctx: ServerContext, storeId: string): Promi
 }
 
 export async function getModel(ctx: ServerContext, storeId: string, modelId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource("Getting model details");
+  const guard = checkOfflineModeResource(ctx, "Getting model details");
   if (guard) return guard;
 
   try {

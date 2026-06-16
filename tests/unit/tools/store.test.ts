@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as storeHandlers from "../../../src/tools/handlers/store.js";
-import { createMockContext } from "../../helpers/mock-client.js";
+import { createMockContext, createOfflineContext } from "../../helpers/mock-client.js";
 import { clearOpenFgaEnv, setOnlineWritableMode, setEnv } from "../../helpers/env.js";
 
 afterEach(() => {
@@ -35,23 +35,25 @@ describe("createStore", () => {
     setEnv("OPENFGA_MCP_API_WRITEABLE", "false");
     const client = { createStore: vi.fn() };
     const result = await storeHandlers.createStore(createMockContext(client), "test-store");
-    expect(result).toBe("❌ Write operations are disabled for safety. To enable create stores, set OPENFGA_MCP_API_WRITEABLE=true.");
+    expect(result).toContain("Write operations are disabled");
     expect(client.createStore).not.toHaveBeenCalled();
   });
 
-  it("prevents store creation in restricted mode", async () => {
+  it("allows store creation when restrict is on but writeable", async () => {
     setOnlineWritableMode();
     setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    const client = { createStore: vi.fn() };
+    const client = {
+      createStore: vi.fn().mockResolvedValue({ id: "store-123" }),
+    };
     const result = await storeHandlers.createStore(createMockContext(client), "test-store");
-    expect(result).toContain("restricted mode");
-    expect(client.createStore).not.toHaveBeenCalled();
+    expect(result).toContain("✅ Successfully created store");
+    expect(client.createStore).toHaveBeenCalled();
   });
 
   it("prevents store creation in offline mode", async () => {
     clearOpenFgaEnv();
     const client = { createStore: vi.fn() };
-    const result = await storeHandlers.createStore(createMockContext(client), "test-store");
+    const result = await storeHandlers.createStore(createOfflineContext(), "test-store");
     expect(result).toContain("Creating stores requires a live OpenFGA instance");
     expect(client.createStore).not.toHaveBeenCalled();
   });
@@ -73,15 +75,13 @@ describe("deleteStore", () => {
     expect(result).toContain("Store not found");
   });
 
-  it("prevents store deletion in restricted mode", async () => {
+  it("allows store deletion when restrict is on but writeable", async () => {
     setOnlineWritableMode();
     setEnv("OPENFGA_MCP_API_RESTRICT", "true");
-    const client = { deleteStore: vi.fn() };
+    const client = { deleteStore: vi.fn().mockResolvedValue(undefined) };
     const result = await storeHandlers.deleteStore(createMockContext(client), "store-123");
-    expect(result).toBe(
-      "❌ The MCP server is configured in restricted mode. You cannot delete stores in this mode.",
-    );
-    expect(client.deleteStore).not.toHaveBeenCalled();
+    expect(result).toBe("✅ Successfully deleted store!");
+    expect(client.deleteStore).toHaveBeenCalled();
   });
 
   it("prevents store deletion in read-only mode", async () => {

@@ -1,3 +1,5 @@
+import { setActiveServerPool } from "../../src/server-pool.js";
+
 const ENV_KEYS = [
   "OPENFGA_MCP_API_URL",
   "OPENFGA_MCP_API_TOKEN",
@@ -18,6 +20,7 @@ const ENV_KEYS = [
 ] as const;
 
 export function clearOpenFgaEnv(): void {
+  setActiveServerPool(null);
   for (const key of ENV_KEYS) {
     delete process.env[key];
   }

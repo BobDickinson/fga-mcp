@@ -54,7 +54,74 @@ Set environment variables to connect to a live OpenFGA instance:
 }
 ```
 
-Write operations are disabled by default. Set `OPENFGA_MCP_API_WRITEABLE=true` to enable store/model/tuple mutations.
+Write operations are disabled by default. Set `OPENFGA_MCP_API_WRITEABLE=true` (legacy env) or `writeable: true` in the FGA config file to enable store/model/tuple mutations.
+
+### FGA config file (multi-server)
+
+Use `--config` to load a JSON file with named OpenFGA backends:
+
+```bash
+npx fga-mcp --config ./fga-mcp.json
+```
+
+Example `fga-mcp.json`:
+
+```json
+{
+  "default_server": "dev",
+  "defaults": { "writeable": false },
+  "servers": {
+    "dev": {
+      "api_url": "http://127.0.0.1:8080",
+      "default_store": "01HXYZ...",
+      "writeable": true
+    },
+    "prod": {
+      "api_url": "https://api.us1.fga.dev",
+      "api_token": "YOUR_TOKEN",
+      "default_store": "01HABC...",
+      "default_model": "01HMODEL...",
+      "restrict": true,
+      "writeable": false
+    }
+  }
+}
+```
+
+Cursor / Claude Desktop with a config file:
+
+```json
+{
+  "mcpServers": {
+    "OpenFGA": {
+      "command": "npx",
+      "args": ["fga-mcp", "--config", "/absolute/path/to/fga-mcp.json"]
+    }
+  }
+}
+```
+
+When no `--config` is passed, legacy `OPENFGA_MCP_API_*` env vars bootstrap a single fixed server named `default`.
+
+### CLI flags
+
+Runtime transport settings use CLI flags first, then env, then defaults:
+
+| Flag | Env fallback | Default |
+|------|--------------|---------|
+| `--config <path>` | `OPENFGA_MCP_CONFIG` (file path) | — |
+| `--transport stdio\|http` | `OPENFGA_MCP_TRANSPORT` | `stdio` |
+| `--host <addr>` | `OPENFGA_MCP_TRANSPORT_HOST` | `127.0.0.1` |
+| `--port <n>` | `OPENFGA_MCP_TRANSPORT_PORT` | `9090` |
+| `--sse` / `--no-sse` | `OPENFGA_MCP_TRANSPORT_SSE` | `true` |
+| `--stateless` / `--no-stateless` | `OPENFGA_MCP_TRANSPORT_STATELESS` | `false` |
+| `--debug` / `--no-debug` | `OPENFGA_MCP_DEBUG` | `true` |
+
+Example:
+
+```bash
+npx fga-mcp --config ./fga-mcp.json --transport http --port 9090
+```
 
 ### From source (development)
 
@@ -107,10 +174,10 @@ Environment variables match the PHP reference server:
 | `OPENFGA_MCP_TRANSPORT_STATELESS` | `false` | Stateless HTTP sessions |
 | `OPENFGA_MCP_DEBUG` | `true` | Write debug logs to `logs/mcp-debug.log` |
 | `OPENFGA_MCP_API_URL` | | OpenFGA server URL |
-| `OPENFGA_MCP_API_WRITEABLE` | `false` | Enable write operations |
-| `OPENFGA_MCP_API_STORE` | | Restrict/default store ID |
-| `OPENFGA_MCP_API_MODEL` | | Restrict/default model ID |
-| `OPENFGA_MCP_API_RESTRICT` | `false` | Lock to configured store/model |
+| `OPENFGA_MCP_API_WRITEABLE` | `false` | Enable write operations (legacy; prefer FGA config `writeable`) |
+| `OPENFGA_MCP_API_STORE` | | Restrict/default store ID (legacy; prefer FGA config) |
+| `OPENFGA_MCP_API_MODEL` | | Restrict/default model ID (legacy; prefer FGA config) |
+| `OPENFGA_MCP_API_RESTRICT` | `false` | Lock to configured store/model (legacy; independent of `writeable`) |
 | `OPENFGA_MCP_API_TOKEN` | | Pre-shared API token |
 | `OPENFGA_MCP_API_CLIENT_ID` | | OAuth client ID |
 | `OPENFGA_MCP_API_CLIENT_SECRET` | | OAuth client secret |
@@ -119,13 +186,35 @@ Environment variables match the PHP reference server:
 
 When debug logging is enabled, tool calls and transport events are recorded via `withToolLogging()` and the FastMCP logger.
 
+### Policy: restrict vs writeable
+
+`restrict` and `writeable` are independent per server (or global defaults):
+
+- **`restrict: true`** — operations must use the pinned `default_store` / `default_model` when provided.
+- **`writeable: true`** — allows mutations (create/delete stores, models, tuples).
+
+A restricted read-only prod server can use `restrict: true` with `writeable: false`. Legacy env setups that relied on `OPENFGA_MCP_API_RESTRICT=true` blocking writes should set both `restrict: true` and `writeable: false` in FGA config for equivalent behavior.
+
+### Optional tool parameters
+
+Admin and relationship tools accept optional routing parameters:
+
+| Parameter | Applies to | Description |
+|-----------|------------|-------------|
+| `server` | Admin tools, relationship tools | Named backend from FGA config (default: `default_server`) |
+| `store` | Relationship tools | Store ID; falls back to server `default_store` |
+| `model` | Relationship tools | Model ID; falls back to server `default_model` or `"latest"` |
+
+Use `list_servers` to see connected backends and `set_default_server` to change the session default.
+
 ## Features
 
-### Tools (17)
+### Tools (19)
 
 - **Stores:** `create_store`, `delete_store`, `get_store`, `list_stores`
 - **Models:** `create_model`, `get_model`, `get_model_dsl`, `list_models`, `verify_model`
 - **Permissions:** `check_permission`, `grant_permission`, `revoke_permission`, `list_objects`, `list_users`
+- **Servers:** `list_servers`, `set_default_server`
 - **Documentation:** `find_similar_documentation`, `search_code_examples`, `search_documentation`
 
 ### Resources (17)
@@ -145,6 +234,11 @@ When connected to a live OpenFGA instance, argument completion is provided for s
 ```
 src/
   index.ts                  # Entry point
+  cli.ts                    # CLI arg parser
+  runtime-config.ts         # Transport/runtime config (CLI + env)
+  fga-config.ts             # FGA JSON config loader
+  server-pool.ts            # Fixed multi-server pool + policy resolution
+  admin-context.ts          # Server/store/model resolution for handlers
   server.ts                 # Server bootstrap, transport, lifecycle
   config.ts                 # Environment configuration
   configuration-parser.ts   # JSON config parsing (HTTP ?config= param)
@@ -152,7 +246,7 @@ src/
   debug-logger.ts           # Debug log file output
   tool-logging.ts           # Tool call logging wrapper
   guards.ts                 # Offline/write/restrict checks
-  client.ts                 # OpenFGA client setup
+  client.ts                 # Server context + OpenFGA client access
   dsl.ts                    # DSL parse/validate via syntax-transformer
   documentation/            # Bundled docs index, search, and chunker
   tools/                    # MCP tools

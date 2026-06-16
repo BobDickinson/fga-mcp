@@ -1,11 +1,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createServerContext, requireClient } from "../../src/client.js";
+import {
+  createServerContext,
+  defaultClient,
+  legacyEnvHasCredentials,
+  requireClient,
+  requirePool,
+} from "../../src/client.js";
 import { isOfflineMode } from "../../src/config.js";
 import * as modelHandlers from "../../src/tools/handlers/model.js";
 import * as relationshipHandlers from "../../src/tools/handlers/relationship.js";
 import * as storeHandlers from "../../src/tools/handlers/store.js";
-import { createOfflineContext } from "../helpers/mock-client.js";
+import { createMockContext, createMultiServerContext, createOfflineContext } from "../helpers/mock-client.js";
 import { clearOpenFgaEnv, setEnv } from "../helpers/env.js";
+
+const VALID_DSL = `model
+  schema 1.1
+type user
+type document
+  relations
+    define viewer: [user]`;
 
 afterEach(() => {
   clearOpenFgaEnv();
@@ -17,21 +30,22 @@ describe("createServerContext", () => {
     clearOpenFgaEnv();
     const ctx = await createServerContext();
     expect(ctx.offline).toBe(true);
-    expect(ctx.client).toBeNull();
+    expect(ctx.pool).toBeNull();
   });
 
   it("returns online context when API URL is configured", async () => {
     setEnv("OPENFGA_MCP_API_URL", "http://127.0.0.1:59999");
     const ctx = await createServerContext();
     expect(ctx.offline).toBe(false);
-    expect(ctx.client).not.toBeNull();
+    expect(ctx.pool?.servers.has("default")).toBe(true);
   });
 
   it("returns online context when only an API token is configured", async () => {
     setEnv("OPENFGA_MCP_API_TOKEN", "test-token");
     const ctx = await createServerContext();
     expect(ctx.offline).toBe(false);
-    expect(ctx.client).not.toBeNull();
+    expect(ctx.pool?.servers.size).toBe(1);
+    expect(ctx.pool?.defaultServer).toBe("default");
   });
 
   it("returns online context when only client credentials are configured", async () => {
@@ -41,17 +55,83 @@ describe("createServerContext", () => {
     setEnv("OPENFGA_MCP_API_AUDIENCE", "https://api.example.com");
     const ctx = await createServerContext();
     expect(ctx.offline).toBe(false);
-    expect(ctx.client).not.toBeNull();
+    expect(ctx.pool?.servers.size).toBe(1);
+  });
+
+  it("throws when FGA config is invalid", async () => {
+    setEnv(
+      "OPENFGA_MCP_CONFIG",
+      JSON.stringify({
+        servers: { prod: { api_url: "http://127.0.0.1:8080", restrict: true } },
+      }),
+    );
+    await expect(createServerContext()).rejects.toThrow(/restrict requires/);
+  });
+});
+
+describe("requirePool", () => {
+  it("returns pool when online", () => {
+    const ctx = createMockContext({});
+    expect(requirePool(ctx).servers.size).toBe(1);
+  });
+
+  it("throws in offline mode", () => {
+    expect(() => requirePool(createOfflineContext())).toThrow("OpenFGA server pool is not available in offline mode");
   });
 });
 
 describe("requireClient", () => {
   it("throws in offline mode", () => {
-    expect(() => requireClient({ client: null, offline: true })).toThrow("offline mode");
+    expect(() => requireClient(createOfflineContext())).toThrow("offline mode");
   });
 
-  it("provides a helpful error message referencing OPENFGA_MCP_API_URL", () => {
-    expect(() => requireClient(createOfflineContext())).toThrow(/OpenFGA client is not available in offline mode/);
+  it("provides a helpful error message referencing offline pool", () => {
+    expect(() => requireClient(createOfflineContext())).toThrow(/OpenFGA server pool is not available in offline mode/);
+  });
+
+  it("resolves the default server client", () => {
+    const dev = { listStores: vi.fn() };
+    const prod = { listStores: vi.fn() };
+    const ctx = createMultiServerContext({ dev, prod }, { defaultServer: "dev" });
+    expect(requireClient(ctx)).toBe(dev);
+  });
+
+  it("resolves a named server client", () => {
+    const dev = { listStores: vi.fn() };
+    const prod = { listStores: vi.fn() };
+    const ctx = createMultiServerContext({ dev, prod }, { defaultServer: "dev" });
+    expect(requireClient(ctx, { server: "prod" })).toBe(prod);
+  });
+});
+
+describe("defaultClient", () => {
+  it("returns null in offline mode", () => {
+    expect(defaultClient(createOfflineContext())).toBeNull();
+  });
+
+  it("returns the default server client when pool exists", () => {
+    const client = { listStores: vi.fn() };
+    expect(defaultClient(createMockContext(client))).toBe(client);
+  });
+});
+
+describe("legacyEnvHasCredentials", () => {
+  it("returns false when no legacy env is set", () => {
+    clearOpenFgaEnv();
+    expect(legacyEnvHasCredentials()).toBe(false);
+  });
+
+  it("returns true when API URL, token, or client ID is set", () => {
+    setEnv("OPENFGA_MCP_API_URL", "http://127.0.0.1:8080");
+    expect(legacyEnvHasCredentials()).toBe(true);
+
+    clearOpenFgaEnv();
+    setEnv("OPENFGA_MCP_API_TOKEN", "token");
+    expect(legacyEnvHasCredentials()).toBe(true);
+
+    clearOpenFgaEnv();
+    setEnv("OPENFGA_MCP_API_CLIENT_ID", "client");
+    expect(legacyEnvHasCredentials()).toBe(true);
   });
 });
 
@@ -96,17 +176,9 @@ describe("offline mode behavior", () => {
       expect(result).toContain("OPENFGA_MCP_API_URL");
     });
 
-    it("blocks verifyModel", async () => {
-      const result = await modelHandlers.verifyModel(
-        offlineCtx,
-        `model
-  schema 1.1
-type user
-type document
-  relations
-    define viewer: [user]`,
-      );
-      expect(result).toContain("OPENFGA_MCP_API_URL");
+    it("allows verifyModel locally without a live server", async () => {
+      const result = await modelHandlers.verifyModel(offlineCtx, VALID_DSL);
+      expect(result).toContain("✅ Successfully verified");
     });
   });
 
@@ -123,7 +195,7 @@ type document
     });
 
     it("blocks createModel", async () => {
-      const result = await modelHandlers.createModel(offlineCtx, "model\n  schema 1.1\ntype user", "store-id");
+      const result = await modelHandlers.createModel(offlineCtx, VALID_DSL, "store-id");
       expect(result).toContain("OPENFGA_MCP_API_URL");
     });
 
