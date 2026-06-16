@@ -66,7 +66,7 @@ jobs:
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           flags: integration
-          files: ./integration-junit.xml
+          files: ./coverage/integration-junit.xml
 
       - name: Upload test artifacts
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
@@ -75,6 +75,6 @@ jobs:
           name: integration-test-results
           path: |
             coverage/integration-cobertura.xml
-            integration-junit.xml
+            coverage/integration-junit.xml
           retention-days: 7
           if-no-files-found: warn

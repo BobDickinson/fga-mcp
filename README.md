@@ -2,7 +2,7 @@
 
 TypeScript MCP server for [OpenFGA](https://openfga.dev/) and [Auth0 FGA](https://auth0.com/fine-grained-authorization), cloned from [openfga-mcp](https://github.com/evansims/openfga-mcp) (PHP) with the same configuration, tools, resources, prompts, and documentation features.
 
-The model authoring guide ([`docs/AUTHORING_OPENFGA_MODELS.md`](docs/AUTHORING_OPENFGA_MODELS.md)) is adapted from [openfga-modeling-mcp](https://github.com/aaguiarz/openfga-modeling-mcp) by [Andrés Aguiar](https://github.com/aaguiarz).
+The model authoring guide ([`docs/AUTHORING_OPENFGA_MODELS.md`](docs/AUTHORING_OPENFGA_MODELS.md)) is adapted from [openfga-modeling-mcp](https://github.com/aaguiarz/openfga-modeling-mcp) (MIT License) by [Andrés Aguiar](https://github.com/aaguiarz).
 
 Requires Node.js **20+**.
 
@@ -15,12 +15,10 @@ Built with:
 
 ## Quick Start
 
-### Install and run (offline mode)
+### From npm
 
 ```bash
-npm install
-npm run build
-npm start
+npx fga-mcp
 ```
 
 Offline mode works without an OpenFGA server — prompts and documentation tools/resources are available.
@@ -31,21 +29,8 @@ Offline mode works without an OpenFGA server — prompts and documentation tools
 {
   "mcpServers": {
     "OpenFGA": {
-      "command": "node",
-      "args": ["/absolute/path/to/fga-mcp/dist/index.js"]
-    }
-  }
-}
-```
-
-For development:
-
-```json
-{
-  "mcpServers": {
-    "OpenFGA": {
       "command": "npx",
-      "args": ["tsx", "/absolute/path/to/fga-mcp/src/index.ts"]
+      "args": ["fga-mcp"]
     }
   }
 }
@@ -59,8 +44,8 @@ Set environment variables to connect to a live OpenFGA instance:
 {
   "mcpServers": {
     "OpenFGA": {
-      "command": "node",
-      "args": ["/absolute/path/to/fga-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["fga-mcp"],
       "env": {
         "OPENFGA_MCP_API_URL": "http://127.0.0.1:8080"
       }
@@ -70,6 +55,29 @@ Set environment variables to connect to a live OpenFGA instance:
 ```
 
 Write operations are disabled by default. Set `OPENFGA_MCP_API_WRITEABLE=true` to enable store/model/tuple mutations.
+
+### From source (development)
+
+```bash
+git clone https://github.com/BobDickinson/fga-mcp.git
+cd fga-mcp
+npm install
+npm run build
+npm start
+```
+
+For development with hot reload:
+
+```json
+{
+  "mcpServers": {
+    "OpenFGA": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/fga-mcp/src/index.ts"]
+    }
+  }
+}
+```
 
 ### HTTP transport
 
@@ -168,7 +176,8 @@ tools/documentation-sync/   # Script to refresh docs/
 | `npm run test:integration` | Run integration tests |
 | `npm run test:integration:docker` | Run integration tests in Docker |
 | `npm run docs:sync` | Sync bundled documentation from upstream repos |
+| `npm publish` | Publish to npm (runs unit tests, then build via lifecycle hooks) |
 
 ## License
 
-Apache-2.0
+MIT

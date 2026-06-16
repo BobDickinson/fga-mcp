@@ -10,12 +10,13 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reportsDirectory: "./coverage",
+      clean: false,
       include: ["src/**/*.ts"],
       reporter: [["cobertura", { file: "integration-cobertura.xml" }]],
     },
     reporters: ["default", "junit"],
     outputFile: {
-      junit: "./integration-junit.xml",
+      junit: "./coverage/integration-junit.xml",
     },
   },
 });

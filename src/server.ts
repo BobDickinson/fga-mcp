@@ -15,7 +15,7 @@ import { registerDocumentationTools } from "./tools/documentation.js";
 import { registerModelTools, registerRelationshipTools, registerStoreTools } from "./tools/openfga.js";
 
 export const SERVER_NAME = "OpenFGA MCP Server";
-export const SERVER_VERSION = "2.0.0";
+export const SERVER_VERSION = "1.0.0";
 
 export const EXPECTED_TOOL_NAMES = [
   "create_store",
