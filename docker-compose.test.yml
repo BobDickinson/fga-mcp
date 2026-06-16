@@ -1,0 +1,36 @@
+services:
+  openfga:
+    image: openfga/openfga:latest
+    container_name: fga-mcp-openfga-test
+    command: run
+    environment:
+      - OPENFGA_PLAYGROUND_ENABLED=false
+      - OPENFGA_DATASTORE_ENGINE=memory
+      - OPENFGA_LOG_LEVEL=info
+      - OPENFGA_HTTP_ADDR=0.0.0.0:8080
+      - OPENFGA_GRPC_ADDR=0.0.0.0:8081
+    ports:
+      - "8080:8080"
+      - "8081:8081"
+    networks:
+      - fga-mcp-test
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: fga-mcp-test-runner
+    depends_on:
+      - openfga
+    environment:
+      - OPENFGA_MCP_API_URL=http://openfga:8080
+      - OPENFGA_MCP_API_WRITEABLE=true
+    volumes:
+      - ./coverage:/app/coverage
+    command: ["npm", "run", "test:integration"]
+    networks:
+      - fga-mcp-test
+
+networks:
+  fga-mcp-test:
+    driver: bridge
