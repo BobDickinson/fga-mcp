@@ -1,7 +1,6 @@
 #!/usr/bin/env node
-import { createServerContext } from "./client.js";
+import { createServerContext, disposeServerContext } from "./client.js";
 import { applyRuntimeConfigToEnv, loadRuntimeConfig } from "./runtime-config.js";
-import { getConfiguredBool } from "./config.js";
 import { logServerLifecycle } from "./debug-logger.js";
 import {
   createMcpServer,
@@ -16,11 +15,9 @@ async function main(): Promise<void> {
   const runtimeConfig = loadRuntimeConfig(process.argv.slice(2));
   applyRuntimeConfigToEnv(runtimeConfig);
 
-  const ctx = await createServerContext(runtimeConfig.configPath);
+  const ctx = await createServerContext(runtimeConfig.configPath, runtimeConfig);
 
-  if (getConfiguredBool("OPENFGA_MCP_DEBUG", true)) {
-    registerProcessLifecycleHandlers();
-  }
+  registerProcessLifecycleHandlers(() => disposeServerContext(ctx));
 
   initializeDocumentationWithLogging();
 

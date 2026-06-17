@@ -1,6 +1,5 @@
 import { FastMCP } from "fastmcp";
 import type { ServerContext } from "./client.js";
-import { registerConfigurableHttpMiddleware } from "./configurable-http.js";
 import { getConfiguredBool, getConfiguredInt, getConfiguredString } from "./config.js";
 import { initializeDocumentationIndex } from "./documentation/index.js";
 import { isDebugEnabled, logServerLifecycle } from "./debug-logger.js";
@@ -20,6 +19,8 @@ export const SERVER_VERSION = "1.0.0";
 export const EXPECTED_TOOL_NAMES = [
   "list_servers",
   "set_default_server",
+  "connect_server",
+  "disconnect_server",
   "create_store",
   "delete_store",
   "get_store",
@@ -39,12 +40,20 @@ export const EXPECTED_TOOL_NAMES = [
   "search_documentation",
 ] as const;
 
-export const EXPECTED_STATIC_RESOURCE_NAMES = [
-  "list_stores",
-  "get_documentation_index",
+export const DOCUMENTATION_STATIC_RESOURCE_NAMES = ["get_documentation_index"] as const;
+
+export const DOCUMENTATION_RESOURCE_TEMPLATE_NAMES = [
+  "get_documentation_overview",
+  "get_class_documentation",
+  "get_sdk_method_documentation",
+  "get_documentation_section",
+  "get_documentation_chunk",
+  "search_documentation",
 ] as const;
 
-export const EXPECTED_RESOURCE_TEMPLATE_NAMES = [
+export const LEGACY_ADMIN_STATIC_RESOURCE_NAMES = ["list_stores"] as const;
+
+export const LEGACY_ADMIN_RESOURCE_TEMPLATE_NAMES = [
   "get_store",
   "list_models",
   "get_latest_model",
@@ -54,12 +63,18 @@ export const EXPECTED_RESOURCE_TEMPLATE_NAMES = [
   "list_objects",
   "list_users",
   "list_relationships",
-  "get_documentation_overview",
-  "get_class_documentation",
-  "get_sdk_method_documentation",
-  "get_documentation_section",
-  "get_documentation_chunk",
-  "search_documentation",
+] as const;
+
+/** @deprecated Use context-specific constants; offline registers documentation only. */
+export const EXPECTED_STATIC_RESOURCE_NAMES = [
+  ...LEGACY_ADMIN_STATIC_RESOURCE_NAMES,
+  ...DOCUMENTATION_STATIC_RESOURCE_NAMES,
+] as const;
+
+/** @deprecated Use context-specific constants; offline registers documentation only. */
+export const EXPECTED_RESOURCE_TEMPLATE_NAMES = [
+  ...LEGACY_ADMIN_RESOURCE_TEMPLATE_NAMES,
+  ...DOCUMENTATION_RESOURCE_TEMPLATE_NAMES,
 ] as const;
 
 export const EXPECTED_PROMPT_NAMES = [
@@ -82,12 +97,21 @@ export const EXPECTED_PROMPT_NAMES = [
   "troubleshoot_unexpected_access",
 ] as const;
 
+export const SERVER_INSTRUCTIONS = `OpenFGA MCP server for authorization model design, SDK documentation, and store administration.
+
+Discovery: Call list_servers first. It returns runtime_connect_enabled and fixed servers (fixed: true). If runtime_connect_enabled is true, use connect_server to add runtime backends; save connection_scope and assigned server from the response.
+
+Routing admin and relationship tools: Omit connection_scope for fixed servers from startup config. For dynamic servers, pass both connection_scope and server (use the assigned name from connect_server, not necessarily requested_name). Omit server to use the default in that pool.
+
+Optional: store and model default from server config when omitted. verify_model validates DSL locally and needs no server.
+
+Policy: writeable: false blocks mutations (create, delete, grant, revoke). restrict: true limits reads and writes to pinned store or model. Check each list_servers entry for writeable and restrict.`;
+
 export function createMcpServer(): FastMCP {
   return new FastMCP({
     name: SERVER_NAME,
     version: SERVER_VERSION,
-    instructions:
-      "OpenFGA MCP Server for planning authorization models, searching SDK documentation, and managing OpenFGA stores when configured with OPENFGA_MCP_API_URL.",
+    instructions: SERVER_INSTRUCTIONS,
     logger: isDebugEnabled()
       ? {
           debug: (...args: unknown[]) => logServerLifecycle("transport_debug", { details: args }),
@@ -169,7 +193,7 @@ export function logStartup(ctx: ServerContext): void {
   });
 }
 
-export function registerProcessLifecycleHandlers(): void {
+export function registerProcessLifecycleHandlers(onShutdown?: () => void): void {
   process.on("uncaughtException", (error) => {
     logServerLifecycle("uncaught_exception", {
       error: error.message,
@@ -193,6 +217,7 @@ export function registerProcessLifecycleHandlers(): void {
 
   const shutdown = (reason: string) => {
     logServerLifecycle("shutdown", { reason });
+    onShutdown?.();
   };
 
   process.on("SIGTERM", () => {
@@ -213,7 +238,6 @@ export function registerProcessLifecycleHandlers(): void {
 export async function startMcpServer(server: FastMCP): Promise<void> {
   const transport = getConfiguredString("OPENFGA_MCP_TRANSPORT", "stdio");
   if (transport === "http") {
-    registerConfigurableHttpMiddleware(server);
     await server.start({
       transportType: "httpStream",
       httpStream: {

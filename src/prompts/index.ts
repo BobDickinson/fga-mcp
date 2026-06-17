@@ -157,12 +157,21 @@ export function registerPrompts(server: FastMCP, ctx: ServerContext): void {
 
   server.addPrompt({
     name: "analyze_permission_inheritance",
-    description: "Analyze permission inheritance paths",
+    description:
+      "Analyze permission inheritance paths. Uses the default fixed server for store completions; does not accept connection_scope.",
     arguments: [
-      { name: "user", required: true },
-      { name: "object", required: true },
-      { name: "expectedAccess", enum: ["should have access", "should not have access", "partial access expected", "conditional access expected"] },
-      { name: "storeId", complete: async (value) => ({ values: await completeStoreIds(ctx, value) }) },
+      { name: "user", description: "Subject in OpenFGA format, e.g. user:alice.", required: true },
+      { name: "object", description: "Object in OpenFGA format, e.g. document:budget.", required: true },
+      {
+        name: "expectedAccess",
+        description: "Expected access outcome for the analysis.",
+        enum: ["should have access", "should not have access", "partial access expected", "conditional access expected"],
+      },
+      {
+        name: "storeId",
+        description: "OpenFGA store ID. Optional when the default server has default_store configured.",
+        complete: async (value) => ({ values: await completeStoreIds(ctx, value) }),
+      },
     ],
     load: async ({ user, object, expectedAccess = "should have access", storeId = "" }) =>
       loaders.analyzePermissionInheritance(user!, object!, expectedAccess, storeId),
@@ -170,13 +179,22 @@ export function registerPrompts(server: FastMCP, ctx: ServerContext): void {
 
   server.addPrompt({
     name: "debug_permission_denial",
-    description: "Debug why a user was denied access",
+    description:
+      "Debug why a user was denied access. Uses the default fixed server for store and model completions; does not accept connection_scope.",
     arguments: [
-      { name: "user", required: true },
-      { name: "relation", required: true },
-      { name: "object", required: true },
-      { name: "storeId", complete: async (value) => ({ values: await completeStoreIds(ctx, value) }) },
-      { name: "modelId", complete: async (value: string) => ({ values: await completeModelIds(ctx, "", value) }) },
+      { name: "user", description: "Subject in OpenFGA format, e.g. user:alice.", required: true },
+      { name: "relation", description: "Relation name, e.g. reader.", required: true },
+      { name: "object", description: "Object in OpenFGA format, e.g. document:budget.", required: true },
+      {
+        name: "storeId",
+        description: "OpenFGA store ID. Optional when the default server has default_store configured.",
+        complete: async (value) => ({ values: await completeStoreIds(ctx, value) }),
+      },
+      {
+        name: "modelId",
+        description: 'Authorization model ID. Optional when default_model is configured or when using "latest".',
+        complete: async (value: string) => ({ values: await completeModelIds(ctx, "", value) }),
+      },
     ],
     load: async ({ user, relation, object, storeId = "", modelId = "" }) =>
       loaders.debugPermissionDenial(user!, relation!, object!, storeId, modelId),
@@ -196,12 +214,17 @@ export function registerPrompts(server: FastMCP, ctx: ServerContext): void {
 
   server.addPrompt({
     name: "troubleshoot_unexpected_access",
-    description: "Troubleshoot unexpected permission grants",
+    description:
+      "Troubleshoot unexpected permission grants. Uses the default fixed server for store completions; does not accept connection_scope.",
     arguments: [
-      { name: "user", required: true },
-      { name: "relation", required: true },
-      { name: "object", required: true },
-      { name: "storeId", complete: async (value) => ({ values: await completeStoreIds(ctx, value) }) },
+      { name: "user", description: "Subject in OpenFGA format, e.g. user:alice.", required: true },
+      { name: "relation", description: "Relation name, e.g. reader.", required: true },
+      { name: "object", description: "Object in OpenFGA format, e.g. document:budget.", required: true },
+      {
+        name: "storeId",
+        description: "OpenFGA store ID. Optional when the default server has default_store configured.",
+        complete: async (value) => ({ values: await completeStoreIds(ctx, value) }),
+      },
     ],
     load: async ({ user, relation, object, storeId = "" }) =>
       loaders.troubleshootUnexpectedAccess(user!, relation!, object!, storeId),

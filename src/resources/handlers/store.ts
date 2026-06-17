@@ -1,13 +1,9 @@
-import { checkOfflineModeResource } from "../../guards.js";
-import { requireClient, type ServerContext } from "../../client.js";
+import type { ResourceTarget } from "../../resource-resolver.js";
 import { errorMessage } from "./utils.js";
 
-export async function listStores(ctx: ServerContext): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource(ctx, "Listing stores");
-  if (guard) return guard;
-
+export async function listStores(target: ResourceTarget): Promise<Record<string, unknown>> {
   try {
-    const response = await requireClient(ctx).listStores();
+    const response = await target.client.listStores();
     const stores = (response.stores ?? []).map((store) => ({
       id: store.id,
       name: store.name,
@@ -21,12 +17,9 @@ export async function listStores(ctx: ServerContext): Promise<Record<string, unk
   }
 }
 
-export async function getStore(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource(ctx, "Fetching store details");
-  if (guard) return guard;
-
+export async function getStore(target: ResourceTarget, storeId: string): Promise<Record<string, unknown>> {
   try {
-    const store = await requireClient(ctx).getStore({ storeId });
+    const store = await target.client.getStore({ storeId });
     return {
       id: store.id,
       name: store.name,
@@ -39,12 +32,9 @@ export async function getStore(ctx: ServerContext, storeId: string): Promise<Rec
   }
 }
 
-export async function listStoreModels(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource(ctx, "Listing store models");
-  if (guard) return guard;
-
+export async function listStoreModels(target: ResourceTarget, storeId: string): Promise<Record<string, unknown>> {
   try {
-    const response = await requireClient(ctx).readAuthorizationModels({ storeId });
+    const response = await target.client.readAuthorizationModels({ storeId });
     const models = (response.authorization_models ?? []).map((model) => ({
       id: model.id,
       created_at: null,

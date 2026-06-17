@@ -22,9 +22,16 @@ export type FgaServerConfig = {
   restrict?: boolean;
 };
 
+export type FgaDynamicConfig = {
+  scope_idle_ttl_seconds?: number | null;
+  max_servers_per_scope?: number | null;
+  max_scopes?: number | null;
+};
+
 export type FgaConfigDocument = {
   default_server?: string;
   allow_runtime_connect?: boolean;
+  dynamic?: FgaDynamicConfig;
   defaults?: FgaDefaultsConfig;
   servers?: Record<string, FgaServerConfig>;
 };
@@ -127,6 +134,28 @@ export function parseFgaConfigDocument(raw: unknown): FgaConfigLoadResult {
       errors.push("allow_runtime_connect must be a boolean");
     } else {
       config.allow_runtime_connect = raw.allow_runtime_connect;
+    }
+  }
+
+  if (raw.dynamic !== undefined) {
+    if (!isRecord(raw.dynamic)) {
+      errors.push("dynamic must be an object");
+    } else {
+      const dynamic: FgaDynamicConfig = {};
+      for (const key of ["scope_idle_ttl_seconds", "max_servers_per_scope", "max_scopes"] as const) {
+        const value = raw.dynamic[key];
+        if (value === undefined) continue;
+        if (value === null) {
+          dynamic[key] = null;
+          continue;
+        }
+        if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+          errors.push(`dynamic.${key} must be a non-negative number or null`);
+        } else {
+          dynamic[key] = Math.trunc(value);
+        }
+      }
+      config.dynamic = dynamic;
     }
   }
 

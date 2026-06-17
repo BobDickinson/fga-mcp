@@ -12,11 +12,12 @@ export async function createModel(
   dsl: string,
   store: string | undefined,
   server?: string,
+  connectionScope?: string,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Creating authorization models");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store });
   if (typeof resolved === "string") return resolved;
 
   const guards = [
@@ -39,11 +40,12 @@ export async function getModel(
   store: string | undefined,
   model: string | undefined,
   server?: string,
+  connectionScope?: string,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Getting authorization model");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store, model });
   if (typeof resolved === "string") return resolved;
 
   const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);
@@ -66,11 +68,12 @@ export async function getModelDsl(
   store: string | undefined,
   model: string | undefined,
   server?: string,
+  connectionScope?: string,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Getting authorization model DSL");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store, model });
   if (typeof resolved === "string") return resolved;
 
   const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);
@@ -93,11 +96,12 @@ export async function listModels(
   ctx: ServerContext,
   store: string | undefined,
   server?: string,
+  connectionScope?: string,
 ): Promise<string | Array<{ id: string | undefined }>> {
   const offline = checkOfflineMode(ctx, "Listing authorization models");
   if (offline) return offline;
 
-  const resolved = resolveAdminTarget(ctx, { server, store, requireStore: true });
+  const resolved = resolveAdminTarget(ctx, { connectionScope, server, store, requireStore: true });
   if (typeof resolved === "string") return resolved;
 
   const restrict = checkRestrictedMode(resolved.policy, resolved.store, undefined);

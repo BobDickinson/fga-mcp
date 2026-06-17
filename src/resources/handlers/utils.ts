@@ -1,4 +1,4 @@
-import { requireClient, type ServerContext } from "../../client.js";
+import type { OpenFgaClient as OpenFgaClientType } from "@openfga/sdk";
 
 export function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -66,11 +66,15 @@ function walkTree(node: unknown, users: Set<string>): void {
   if (n.computed) walkTree(n.computed, users);
 }
 
-export async function readAllTupleField(ctx: ServerContext, storeId: string, field: "user" | "object"): Promise<string[]> {
+export async function readAllTupleField(
+  client: OpenFgaClientType,
+  storeId: string,
+  field: "user" | "object",
+): Promise<string[]> {
   const values = new Set<string>();
   let continuationToken: string | undefined;
   do {
-    const response = await requireClient(ctx).read({}, { storeId, pageSize: 100, continuationToken });
+    const response = await client.read({}, { storeId, pageSize: 100, continuationToken });
     for (const tuple of response.tuples ?? []) {
       const value = tuple.key?.[field];
       if (value) values.add(value);
@@ -80,11 +84,11 @@ export async function readAllTupleField(ctx: ServerContext, storeId: string, fie
   return [...values];
 }
 
-export async function readAllRelationships(ctx: ServerContext, storeId: string) {
+export async function readAllRelationships(client: OpenFgaClientType, storeId: string) {
   const relationships: Array<{ user: string; relation: string; object: string }> = [];
   let continuationToken: string | undefined;
   do {
-    const response = await requireClient(ctx).read({}, { storeId, pageSize: 100, continuationToken });
+    const response = await client.read({}, { storeId, pageSize: 100, continuationToken });
     for (const tuple of response.tuples ?? []) {
       if (tuple.key?.user && tuple.key.relation && tuple.key.object) {
         relationships.push({ user: tuple.key.user, relation: tuple.key.relation, object: tuple.key.object });

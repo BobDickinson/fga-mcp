@@ -6,16 +6,24 @@ import {
   resolveClient,
   type ResolveClientArgs,
 } from "./server-pool.js";
+import { DynamicScopeStore, resolveDynamicConfig } from "./dynamic-scope-store.js";
 import { loadFgaConfig, type FgaConfigDocument } from "./fga-config.js";
 import { getConfiguredString } from "./config.js";
+import type { RuntimeConfig } from "./runtime-config.js";
+import { resolveConnection } from "./connection-resolver.js";
 
 export type ServerContext = {
   pool: FixedServerPool | null;
+  dynamicStore: DynamicScopeStore | null;
+  transport: "stdio" | "http";
   offline: boolean;
   fgaConfig: FgaConfigDocument | null;
 };
 
-export async function createServerContext(configPath?: string): Promise<ServerContext> {
+export async function createServerContext(
+  configPath?: string,
+  runtime: Pick<RuntimeConfig, "transport"> = { transport: "stdio" },
+): Promise<ServerContext> {
   const loaded = loadFgaConfig(configPath);
 
   if (!loaded.ok) {
@@ -23,51 +31,90 @@ export async function createServerContext(configPath?: string): Promise<ServerCo
   }
 
   const { config } = loaded;
-  const hasServers = Object.keys(config.servers ?? {}).length > 0;
+  const hasFixedServers = Object.keys(config.servers ?? {}).length > 0;
+  const allowRuntimeConnect = config.allow_runtime_connect ?? false;
 
-  if (!hasServers) {
+  if (!hasFixedServers && !allowRuntimeConnect) {
     logInfo("Starting OpenFGA MCP Server in OFFLINE MODE");
     logInfo("Available features: Planning (Prompts) and Coding assistance");
     logInfo("To enable administrative features, configure OPENFGA_MCP servers or OPENFGA_MCP_API_URL\n");
-    return { pool: null, offline: true, fgaConfig: config };
+    return {
+      pool: null,
+      dynamicStore: null,
+      transport: runtime.transport,
+      offline: true,
+      fgaConfig: config,
+    };
   }
 
-  const pool = await createFixedServerPool(config);
+  const pool = hasFixedServers ? await createFixedServerPool(config) : null;
+  const dynamicStore = allowRuntimeConnect
+    ? new DynamicScopeStore({
+        transport: runtime.transport,
+        globalDefaults: config.defaults ?? {},
+        config: resolveDynamicConfig(config.dynamic),
+      })
+    : null;
+
   logInfo("Starting OpenFGA MCP Server in ONLINE MODE");
-  for (const [name, entry] of pool!.servers.entries()) {
-    logInfo(`  - server "${name}": ${entry.profile.api_url}`);
+  if (pool) {
+    for (const [name, entry] of pool.servers.entries()) {
+      logInfo(`  - fixed server "${name}": ${entry.profile.api_url}`);
+    }
+    if (pool.defaultServer) {
+      logInfo(`Default fixed server: ${pool.defaultServer}`);
+    }
   }
-  if (pool!.defaultServer) {
-    logInfo(`Default server: ${pool!.defaultServer}`);
+  if (allowRuntimeConnect) {
+    logInfo(`Runtime connect enabled (${runtime.transport} transport)`);
   }
   logInfo("All features enabled: Planning, Coding, and Administrative\n");
 
-  return { pool, offline: false, fgaConfig: config };
+  return { pool, dynamicStore, transport: runtime.transport, offline: false, fgaConfig: config };
 }
 
 export function requirePool(ctx: ServerContext): FixedServerPool {
   if (!ctx.pool || ctx.pool.servers.size === 0) {
-    throw new Error("OpenFGA server pool is not available in offline mode");
+    throw new Error("OpenFGA fixed server pool is not available");
   }
   return ctx.pool;
 }
 
 export function requireClient(ctx: ServerContext, args: ResolveClientArgs = {}): OpenFgaClientType {
-  return resolveClient(requirePool(ctx), args);
+  return resolveConnection(ctx, args).client;
 }
 
 /** Default server's client — used by completions until scoped in Release D. */
 export function defaultClient(ctx: ServerContext): OpenFgaClientType | null {
-  if (!ctx.pool || ctx.pool.servers.size === 0) return null;
-  try {
-    return resolveClient(ctx.pool, {});
-  } catch {
-    return ctx.pool.servers.values().next().value?.client ?? null;
+  if (ctx.pool && ctx.pool.servers.size > 0) {
+    try {
+      return resolveClient(ctx.pool, {});
+    } catch {
+      return ctx.pool.servers.values().next().value?.client ?? null;
+    }
   }
+
+  const scopeId = ctx.dynamicStore?.getSingleScopeId();
+  if (scopeId && ctx.dynamicStore) {
+    try {
+      return ctx.dynamicStore.resolveClient(scopeId);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 export function isContextOffline(ctx: ServerContext): boolean {
-  return ctx.offline || !ctx.pool || ctx.pool.servers.size === 0;
+  if (ctx.offline) return true;
+  const hasFixed = ctx.pool !== null && ctx.pool.servers.size > 0;
+  const hasDynamic = ctx.dynamicStore !== null && ctx.dynamicStore.getScopeCount() > 0;
+  return !hasFixed && !hasDynamic;
+}
+
+export function disposeServerContext(ctx: ServerContext): void {
+  ctx.dynamicStore?.dispose();
 }
 
 function logInfo(message: string): void {

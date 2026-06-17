@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as modelResources from "../../../src/resources/handlers/model.js";
-import { createMockContext, createOfflineContext } from "../../helpers/mock-client.js";
+import { createOfflineContext } from "../../helpers/mock-client.js";
+import { targetFrom } from "../../helpers/resource-target.js";
+import { resolveResourceTarget } from "../../../src/resource-resolver.js";
 import { clearOpenFgaEnv, setOnlineWritableMode } from "../../helpers/env.js";
 
 afterEach(() => {
@@ -19,7 +21,7 @@ describe("getModel resource", () => {
         },
       }),
     };
-    const result = await modelResources.getModel(createMockContext(client), "test-store-id", "test-model-id");
+    const result = await modelResources.getModel(targetFrom(client), "test-store-id", "test-model-id");
     expect(result.id).toBe("test-model-id");
     expect(result.type_count).toBe(2);
   });
@@ -27,7 +29,7 @@ describe("getModel resource", () => {
   it("handles getAuthorizationModel errors", async () => {
     setOnlineWritableMode();
     const client = { readAuthorizationModel: vi.fn().mockRejectedValue(new Error("Not found")) };
-    const result = await modelResources.getModel(createMockContext(client), "test-store-id", "non-existent-model");
+    const result = await modelResources.getModel(targetFrom(client), "test-store-id", "non-existent-model");
     expect(result.error).toContain("Failed to fetch model");
   });
 });
@@ -40,7 +42,7 @@ describe("getLatestModel resource", () => {
         authorization_models: [{ id: "latest-model", type_definitions: [{ type: "user" }] }],
       }),
     };
-    const result = await modelResources.getLatestModel(createMockContext(client), "test-store-id");
+    const result = await modelResources.getLatestModel(targetFrom(client), "test-store-id");
     expect(result.id).toBe("latest-model");
     expect(result.is_latest).toBe(true);
   });
@@ -48,28 +50,24 @@ describe("getLatestModel resource", () => {
   it("handles empty store", async () => {
     setOnlineWritableMode();
     const client = { readAuthorizationModels: vi.fn().mockResolvedValue({ authorization_models: [] }) };
-    const result = await modelResources.getLatestModel(createMockContext(client), "test-store-id");
+    const result = await modelResources.getLatestModel(targetFrom(client), "test-store-id");
     expect(result.error).toContain("No models found");
   });
 
   it("handles listAuthorizationModels errors", async () => {
     setOnlineWritableMode();
     const client = { readAuthorizationModels: vi.fn().mockRejectedValue(new Error("Network error")) };
-    const result = await modelResources.getLatestModel(createMockContext(client), "test-store-id");
+    const result = await modelResources.getLatestModel(targetFrom(client), "test-store-id");
     expect(result.error).toContain("Failed to fetch models");
   });
 });
 
 describe("offline mode behavior", () => {
-  it("prevents getModel in offline mode", async () => {
+  it("resolveResourceTarget returns error when offline", () => {
     clearOpenFgaEnv();
-    const result = await modelResources.getModel(createOfflineContext(), "test-store-id", "test-model-id");
-    expect(result.error).toContain("Getting model details requires a live OpenFGA instance");
-  });
-
-  it("prevents getLatestModel in offline mode", async () => {
-    clearOpenFgaEnv();
-    const result = await modelResources.getLatestModel(createOfflineContext(), "test-store-id");
-    expect(result.error).toContain("Getting latest model requires a live OpenFGA instance");
+    const result = resolveResourceTarget(createOfflineContext(), { storeId: "test-store-id" });
+    expect(result).toEqual({
+      error: "❌ Resource requires a live OpenFGA instance. Configure FGA servers via --config or use connect_server.",
+    });
   });
 });

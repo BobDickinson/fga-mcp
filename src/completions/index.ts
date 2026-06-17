@@ -1,7 +1,11 @@
-import { isOfflineMode, isRestrictedMode } from "../config.js";
+import { isOfflineMode } from "../config.js";
 import { getDocumentationIndex } from "../documentation/index.js";
 import type { ServerContext } from "../client.js";
-import { defaultClient } from "../client.js";
+import { requirePool } from "../client.js";
+import type { CompletionScope } from "../resource-resolver.js";
+import { resolveCompletionClient, resolveCompletionPolicy } from "../resource-resolver.js";
+
+export type { CompletionScope };
 
 export function filterCompletions(completions: string[], currentValue: string): string[] {
   if (!currentValue) return completions;
@@ -9,8 +13,36 @@ export function filterCompletions(completions: string[], currentValue: string): 
   return completions.filter((c) => c.toLowerCase().startsWith(lower));
 }
 
-export async function completeStoreIds(ctx: ServerContext, value: string, server?: string): Promise<string[]> {
-  const client = defaultClient(ctx);
+export async function completeServerNames(
+  ctx: ServerContext,
+  value: string,
+  scope: Pick<CompletionScope, "connectionScope"> = {},
+): Promise<string[]> {
+  if (isOfflineMode()) return [];
+
+  if (scope.connectionScope && ctx.dynamicStore) {
+    try {
+      const servers = ctx.dynamicStore.listServers(scope.connectionScope).map((s) => s.name);
+      return filterCompletions(servers, value);
+    } catch {
+      return [];
+    }
+  }
+
+  try {
+    const pool = requirePool(ctx);
+    return filterCompletions([...pool.servers.keys()], value);
+  } catch {
+    return [];
+  }
+}
+
+export async function completeStoreIds(
+  ctx: ServerContext,
+  value: string,
+  scope: CompletionScope = {},
+): Promise<string[]> {
+  const client = resolveCompletionClient(ctx, scope);
   if (isOfflineMode() || !client) return [];
   try {
     const response = await client.listStores();
@@ -21,10 +53,16 @@ export async function completeStoreIds(ctx: ServerContext, value: string, server
   }
 }
 
-export async function completeModelIds(ctx: ServerContext, storeId: string, value: string): Promise<string[]> {
-  const client = defaultClient(ctx);
+export async function completeModelIds(
+  ctx: ServerContext,
+  storeId: string,
+  value: string,
+  scope: CompletionScope = {},
+): Promise<string[]> {
+  const client = resolveCompletionClient(ctx, scope);
+  const policy = resolveCompletionPolicy(ctx, scope);
   if (isOfflineMode() || !client || !storeId) return filterCompletions(["latest"], value);
-  if (isRestrictedMode()) return [];
+  if (policy?.restrict) return [];
   try {
     const response = await client.readAuthorizationModels({ storeId });
     const ids = (response.authorization_models ?? []).map((m) => m.id).filter(Boolean) as string[];
@@ -35,9 +73,14 @@ export async function completeModelIds(ctx: ServerContext, storeId: string, valu
   }
 }
 
-export async function completeRelations(ctx: ServerContext, storeId: string, value: string): Promise<string[]> {
+export async function completeRelations(
+  ctx: ServerContext,
+  storeId: string,
+  value: string,
+  scope: CompletionScope = {},
+): Promise<string[]> {
   const common = ["viewer", "reader", "editor", "writer", "owner", "member", "admin"];
-  const client = defaultClient(ctx);
+  const client = resolveCompletionClient(ctx, scope);
   if (isOfflineMode() || !client || !storeId) return filterCompletions(common, value);
   try {
     const response = await client.readAuthorizationModel({ storeId, authorizationModelId: "latest" });
@@ -58,10 +101,12 @@ export async function completeFromTuples(
   field: "user" | "object",
   value: string,
   fallback: string[],
+  scope: CompletionScope = {},
 ): Promise<string[]> {
-  const client = defaultClient(ctx);
+  const client = resolveCompletionClient(ctx, scope);
+  const policy = resolveCompletionPolicy(ctx, scope);
   if (isOfflineMode() || !client || !storeId) return filterCompletions(fallback, value);
-  if (isRestrictedMode()) return [];
+  if (policy?.restrict) return [];
   try {
     const response = await client.read({}, { storeId, pageSize: 50 });
     const values = new Set<string>();

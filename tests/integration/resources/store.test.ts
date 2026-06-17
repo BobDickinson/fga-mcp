@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as storeResources from "../../../src/resources/handlers/store.js";
-import { createMockContext } from "../../helpers/mock-client.js";
-import { createTestStore, deleteTestStore, getTestClient, setupTestStore, setupTestStoreWithModel } from "../helpers.js";
-
-function ctx() {
-  return createMockContext(getTestClient());
-}
+import { createTestStore, deleteTestStore, integrationResourceTarget, setupTestStore, setupTestStoreWithModel } from "../helpers.js";
 
 describe("StoreResources Integration", () => {
   it("lists real stores including test stores", async () => {
@@ -13,7 +8,7 @@ describe("StoreResources Integration", () => {
     const storeId = await createTestStore(testStoreName);
 
     try {
-      const result = await storeResources.listStores(ctx());
+      const result = await storeResources.listStores(integrationResourceTarget());
       expect(Array.isArray(result.stores)).toBe(true);
       expect(result.count).toBeGreaterThan(0);
 
@@ -31,7 +26,7 @@ describe("StoreResources Integration", () => {
     const storeId = await createTestStore(testStoreName);
 
     try {
-      const result = await storeResources.getStore(ctx(), storeId);
+      const result = await storeResources.getStore(integrationResourceTarget(), storeId);
       expect(result.id).toBe(storeId);
       expect(result.name).toBe(testStoreName);
       expect(result.created_at).toBeTruthy();
@@ -41,7 +36,7 @@ describe("StoreResources Integration", () => {
   });
 
   it("handles non-existent store gracefully", async () => {
-    const result = await storeResources.getStore(ctx(), "non-existent-store-id");
+    const result = await storeResources.getStore(integrationResourceTarget(), "non-existent-store-id");
     expect(result.error).toContain("❌ Failed to fetch store!");
   });
 
@@ -55,7 +50,7 @@ type document
     define writer: [user]`;
     const { store: storeId, model: modelId } = await setupTestStoreWithModel(dsl);
 
-    const result = await storeResources.listStoreModels(ctx(), storeId);
+    const result = await storeResources.listStoreModels(integrationResourceTarget(), storeId);
     expect(result.store_id).toBe(storeId);
     expect((result.models as Array<{ id: string }>).length).toBe(1);
     expect((result.models as Array<{ id: string }>)[0].id).toBe(modelId);
@@ -65,7 +60,7 @@ type document
 
   it("handles store with no models", async () => {
     const storeId = await setupTestStore();
-    const result = await storeResources.listStoreModels(ctx(), storeId);
+    const result = await storeResources.listStoreModels(integrationResourceTarget(), storeId);
     expect(result.store_id).toBe(storeId);
     expect(result.models).toEqual([]);
     expect(result.count).toBe(0);

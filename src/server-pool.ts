@@ -172,7 +172,7 @@ export function resolveModelId(model: string | undefined, policy: ServerPolicy):
 
 export function resolveClient(pool: FixedServerPool, args: ResolveClientArgs = {}): OpenFgaClientType {
   if (args.connectionScope) {
-    throw new Error("connection_scope is not supported until dynamic server connections are enabled.");
+    throw new Error("connection_scope requires ServerContext resolution via resolveConnection()");
   }
 
   const serverRef = resolveServerRef(pool, args.server);

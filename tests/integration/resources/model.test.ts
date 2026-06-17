@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import * as modelResources from "../../../src/resources/handlers/model.js";
-import { createMockContext } from "../../helpers/mock-client.js";
-import { createTestModel, getTestClient, setupTestStore, setupTestStoreWithModel } from "../helpers.js";
-
-function ctx() {
-  return createMockContext(getTestClient());
-}
+import { createTestModel, integrationResourceTarget, setupTestStore, setupTestStoreWithModel } from "../helpers.js";
 
 const COMPLEX_DSL = `model
   schema 1.1
@@ -22,7 +17,7 @@ type document
 describe("ModelResources Integration", () => {
   it("gets model details", async () => {
     const { store: storeId, model: modelId } = await setupTestStoreWithModel(COMPLEX_DSL);
-    const result = await modelResources.getModel(ctx(), storeId, modelId);
+    const result = await modelResources.getModel(integrationResourceTarget(), storeId, modelId);
 
     expect(result.id).toBe(modelId);
     expect(result.schema_version).toBe("1.1");
@@ -57,7 +52,7 @@ type document
     define writer: [user]`;
     const latestModelId = await createTestModel(storeId, dsl2);
 
-    const result = await modelResources.getLatestModel(ctx(), storeId);
+    const result = await modelResources.getLatestModel(integrationResourceTarget(), storeId);
     expect(result.store_id).toBe(storeId);
     expect(result.id).toBe(latestModelId);
     expect(result.is_latest).toBe(true);
@@ -69,13 +64,13 @@ type document
 
   it("handles store with no models", async () => {
     const storeId = await setupTestStore();
-    const result = await modelResources.getLatestModel(ctx(), storeId);
+    const result = await modelResources.getLatestModel(integrationResourceTarget(), storeId);
     expect(result.error).toContain("❌ No models found in the store");
   });
 
   it("handles non-existent model", async () => {
     const storeId = await setupTestStore();
-    const result = await modelResources.getModel(ctx(), storeId, "non-existent-model-id");
+    const result = await modelResources.getModel(integrationResourceTarget(), storeId, "non-existent-model-id");
     expect(result.error).toContain("❌ Failed to fetch model!");
   });
 });

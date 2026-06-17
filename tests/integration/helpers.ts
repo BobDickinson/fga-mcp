@@ -1,5 +1,9 @@
 import { OpenFgaClient } from "@openfga/sdk";
 import { parseDsl } from "../../src/dsl.js";
+import type { ServerContext } from "../../src/client.js";
+import { setActiveServerPool } from "../../src/server-pool.js";
+import { createDynamicContext } from "../helpers/mock-client.js";
+import { targetFrom } from "../helpers/resource-target.js";
 
 const DEFAULT_MODEL_DSL = `model
   schema 1.1
@@ -14,6 +18,52 @@ type document
 
 let sharedClient: OpenFgaClient | null = null;
 const testStoreIds: string[] = [];
+let integrationApiUrl = "http://localhost:8080";
+
+export function getTestApiUrl(): string {
+  return integrationApiUrl;
+}
+
+export function restoreIntegrationEnv(): void {
+  setActiveServerPool(null);
+  process.env.OPENFGA_MCP_API_URL = integrationApiUrl;
+  process.env.OPENFGA_MCP_API_WRITEABLE = "true";
+  delete process.env.OPENFGA_MCP_API_TOKEN;
+  delete process.env.OPENFGA_MCP_API_CLIENT_ID;
+  delete process.env.OPENFGA_MCP_API_CLIENT_SECRET;
+  delete process.env.OPENFGA_MCP_API_ISSUER;
+  delete process.env.OPENFGA_MCP_API_AUDIENCE;
+  delete process.env.OPENFGA_MCP_API_RESTRICT;
+  delete process.env.OPENFGA_MCP_API_STORE;
+  delete process.env.OPENFGA_MCP_API_MODEL;
+}
+
+export function createIntegrationDynamicContext(): ServerContext {
+  return createDynamicContext({
+    transport: "stdio",
+    globalDefaults: { writeable: true },
+  });
+}
+
+export function integrationResourceTarget(serverRef = "default") {
+  return targetFrom(getTestClient(), serverRef);
+}
+
+export type ConnectServerResult = {
+  connection_scope: string;
+  server: string;
+  renamed: boolean;
+  connected: boolean;
+  api_url: string;
+  requested_name?: string;
+};
+
+export function requireConnectResult(result: string | Record<string, unknown>): ConnectServerResult {
+  if (typeof result === "string") {
+    throw new Error(`connect_server failed: ${result}`);
+  }
+  return result as ConnectServerResult;
+}
 
 export async function waitForOpenFGA(url: string, maxAttempts = 60): Promise<void> {
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
@@ -84,12 +134,12 @@ export async function setupTestStoreWithModel(dsl?: string): Promise<{ store: st
 }
 
 export async function initIntegrationTests(): Promise<void> {
-  const url = process.env.OPENFGA_MCP_API_URL ?? "http://localhost:8080";
-  process.env.OPENFGA_MCP_API_URL = url;
+  integrationApiUrl = process.env.OPENFGA_MCP_API_URL ?? "http://localhost:8080";
+  process.env.OPENFGA_MCP_API_URL = integrationApiUrl;
   process.env.OPENFGA_MCP_API_WRITEABLE = "true";
 
-  await waitForOpenFGA(url);
-  sharedClient = new OpenFgaClient({ apiUrl: url });
+  await waitForOpenFGA(integrationApiUrl);
+  sharedClient = new OpenFgaClient({ apiUrl: integrationApiUrl });
 }
 
 export async function cleanupIntegrationTests(): Promise<void> {

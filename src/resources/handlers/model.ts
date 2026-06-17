@@ -1,13 +1,9 @@
-import { checkOfflineModeResource } from "../../guards.js";
-import { requireClient, type ServerContext } from "../../client.js";
+import type { ResourceTarget } from "../../resource-resolver.js";
 import { errorMessage, formatModelData } from "./utils.js";
 
-export async function getLatestModel(ctx: ServerContext, storeId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource(ctx, "Getting latest model");
-  if (guard) return guard;
-
+export async function getLatestModel(target: ResourceTarget, storeId: string): Promise<Record<string, unknown>> {
   try {
-    const response = await requireClient(ctx).readAuthorizationModels({ storeId });
+    const response = await target.client.readAuthorizationModels({ storeId });
     const latest = response.authorization_models?.[0];
     if (!latest) return { error: "❌ No models found in the store" };
     return formatModelData(latest, storeId, true);
@@ -16,12 +12,13 @@ export async function getLatestModel(ctx: ServerContext, storeId: string): Promi
   }
 }
 
-export async function getModel(ctx: ServerContext, storeId: string, modelId: string): Promise<Record<string, unknown>> {
-  const guard = checkOfflineModeResource(ctx, "Getting model details");
-  if (guard) return guard;
-
+export async function getModel(
+  target: ResourceTarget,
+  storeId: string,
+  modelId: string,
+): Promise<Record<string, unknown>> {
   try {
-    const response = await requireClient(ctx).readAuthorizationModel({ storeId, authorizationModelId: modelId });
+    const response = await target.client.readAuthorizationModel({ storeId, authorizationModelId: modelId });
     const model = response.authorization_model;
     if (!model) return { error: "❌ Model not found" };
     return formatModelData(model, storeId);

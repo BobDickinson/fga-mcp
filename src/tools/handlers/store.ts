@@ -6,11 +6,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function createStore(ctx: ServerContext, name: string, server?: string): Promise<string> {
+export async function createStore(ctx: ServerContext, name: string, server?: string, connectionScope?: string): Promise<string> {
   const offline = checkOfflineMode(ctx, "Creating stores");
   if (offline) return offline;
 
-  const resolved = resolveAdminTarget(ctx, { server, requireStore: false });
+  const resolved = resolveAdminTarget(ctx, { connectionScope, server, requireStore: false });
   if (typeof resolved === "string") return resolved;
 
   const write = checkWritePermission(resolved.policy, "create stores");
@@ -24,11 +24,11 @@ export async function createStore(ctx: ServerContext, name: string, server?: str
   }
 }
 
-export async function deleteStore(ctx: ServerContext, id: string, server?: string): Promise<string> {
+export async function deleteStore(ctx: ServerContext, id: string, server?: string, connectionScope?: string): Promise<string> {
   const offline = checkOfflineMode(ctx, "Deleting stores");
   if (offline) return offline;
 
-  const resolved = resolveAdminTarget(ctx, { server, store: id, requireStore: false });
+  const resolved = resolveAdminTarget(ctx, { connectionScope, server, store: id, requireStore: false });
   if (typeof resolved === "string") return resolved;
 
   const guards = [
@@ -49,11 +49,12 @@ export async function getStore(
   ctx: ServerContext,
   id: string,
   server?: string,
+  connectionScope?: string,
 ): Promise<string | Record<string, unknown>> {
   const offline = checkOfflineMode(ctx, "Getting store details");
   if (offline) return offline;
 
-  const resolved = resolveAdminTarget(ctx, { server, requireStore: false });
+  const resolved = resolveAdminTarget(ctx, { connectionScope, server, requireStore: false });
   if (typeof resolved === "string") return resolved;
 
   const restrict = checkRestrictedMode(resolved.policy, id, undefined);
@@ -73,11 +74,11 @@ export async function getStore(
   }
 }
 
-export async function listStores(ctx: ServerContext, server?: string): Promise<string | Array<Record<string, unknown>>> {
+export async function listStores(ctx: ServerContext, server?: string, connectionScope?: string): Promise<string | Array<Record<string, unknown>>> {
   const offline = checkOfflineMode(ctx, "Listing stores");
   if (offline) return offline;
 
-  const resolved = resolveAdminTarget(ctx, { server, requireStore: false });
+  const resolved = resolveAdminTarget(ctx, { connectionScope, server, requireStore: false });
   if (typeof resolved === "string") return resolved;
 
   try {

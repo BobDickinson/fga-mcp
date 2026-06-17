@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
-import { createOfflineContext } from "../helpers/mock-client.js";
+import { createMockContext, createOfflineContext } from "../helpers/mock-client.js";
 import {
+  DOCUMENTATION_RESOURCE_TEMPLATE_NAMES,
+  DOCUMENTATION_STATIC_RESOURCE_NAMES,
   EXPECTED_PROMPT_NAMES,
-  EXPECTED_RESOURCE_TEMPLATE_NAMES,
-  EXPECTED_STATIC_RESOURCE_NAMES,
   EXPECTED_TOOL_NAMES,
+  LEGACY_ADMIN_RESOURCE_TEMPLATE_NAMES,
+  LEGACY_ADMIN_STATIC_RESOURCE_NAMES,
   SERVER_NAME,
   SERVER_VERSION,
   createMcpServer,
@@ -17,7 +19,8 @@ describe("MCP server bootstrap", () => {
     expect(server).toBeDefined();
     expect(server.options.name).toBe(SERVER_NAME);
     expect(server.options.version).toBe(SERVER_VERSION);
-    expect(server.options.instructions).toContain("OpenFGA MCP Server");
+    expect(server.options.instructions).toContain("list_servers");
+    expect(server.options.instructions).toContain("runtime_connect_enabled");
   });
 
   it("registers all expected tools", () => {
@@ -46,7 +49,7 @@ describe("MCP server bootstrap", () => {
     expect(registeredPrompts).toHaveLength(EXPECTED_PROMPT_NAMES.length);
   });
 
-  it("registers exactly 2 static resources and 15 resource templates (17 total endpoints)", () => {
+  it("registers documentation resources only when offline", () => {
     const server = createMcpServer();
     const addResource = vi.spyOn(server, "addResource");
     const addResourceTemplate = vi.spyOn(server, "addResourceTemplate");
@@ -56,19 +59,27 @@ describe("MCP server bootstrap", () => {
     const resourceNames = addResource.mock.calls.map(([resource]) => resource.name);
     const templateNames = addResourceTemplate.mock.calls.map(([resource]) => resource.name);
 
-    expect(resourceNames).toHaveLength(EXPECTED_STATIC_RESOURCE_NAMES.length);
-    expect(templateNames).toHaveLength(EXPECTED_RESOURCE_TEMPLATE_NAMES.length);
+    expect(resourceNames).toEqual([...DOCUMENTATION_STATIC_RESOURCE_NAMES]);
+    expect(templateNames.sort()).toEqual([...DOCUMENTATION_RESOURCE_TEMPLATE_NAMES].sort());
+    expect(resourceNames.length + templateNames.length).toBe(7);
+  });
+
+  it("registers legacy admin and documentation resources for a single fixed server", () => {
+    const server = createMcpServer();
+    const addResource = vi.spyOn(server, "addResource");
+    const addResourceTemplate = vi.spyOn(server, "addResourceTemplate");
+
+    registerMcpCapabilities(server, createMockContext({}));
+
+    const resourceNames = addResource.mock.calls.map(([resource]) => resource.name);
+    const templateNames = addResourceTemplate.mock.calls.map(([resource]) => resource.name);
+
+    expect(resourceNames.sort()).toEqual(
+      [...LEGACY_ADMIN_STATIC_RESOURCE_NAMES, ...DOCUMENTATION_STATIC_RESOURCE_NAMES].sort(),
+    );
+    expect(templateNames.sort()).toEqual(
+      [...LEGACY_ADMIN_RESOURCE_TEMPLATE_NAMES, ...DOCUMENTATION_RESOURCE_TEMPLATE_NAMES].sort(),
+    );
     expect(resourceNames.length + templateNames.length).toBe(17);
-
-    for (const resourceName of EXPECTED_STATIC_RESOURCE_NAMES) {
-      expect(resourceNames).toContain(resourceName);
-    }
-
-    for (const templateName of EXPECTED_RESOURCE_TEMPLATE_NAMES) {
-      expect(templateNames).toContain(templateName);
-    }
-
-    expect(resourceNames.sort()).toEqual([...EXPECTED_STATIC_RESOURCE_NAMES].sort());
-    expect(templateNames.sort()).toEqual([...EXPECTED_RESOURCE_TEMPLATE_NAMES].sort());
   });
 });

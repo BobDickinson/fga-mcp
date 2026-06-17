@@ -15,11 +15,12 @@ export async function checkPermission(
   relation: string,
   object: string,
   server?: string,
+  connectionScope?: string,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Checking permissions");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store, model });
   if (typeof resolved === "string") return resolved;
 
   const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);
@@ -44,11 +45,12 @@ export async function grantPermission(
   relation: string,
   object: string,
   server?: string,
+  connectionScope?: string,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Granting permissions");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store, model });
   if (typeof resolved === "string") return resolved;
 
   const guards = [
@@ -76,11 +78,12 @@ export async function revokePermission(
   relation: string,
   object: string,
   server?: string,
+  connectionScope?: string,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Revoking permissions");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store, model });
   if (typeof resolved === "string") return resolved;
 
   const guards = [
@@ -108,11 +111,12 @@ export async function listObjects(
   user: string,
   relation: string,
   server?: string,
+  connectionScope?: string,
 ): Promise<string | string[]> {
   const offline = checkOfflineMode(ctx, "Listing objects");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store, model });
   if (typeof resolved === "string") return resolved;
 
   const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);
@@ -136,11 +140,12 @@ export async function listUsers(
   object: string,
   relation: string,
   server?: string,
+  connectionScope?: string,
 ): Promise<string | string[]> {
   const offline = checkOfflineMode(ctx, "Listing users");
   if (offline) return offline;
 
-  const resolved = resolveTupleTarget(ctx, { server, store, model });
+  const resolved = resolveTupleTarget(ctx, { connectionScope, server, store, model });
   if (typeof resolved === "string") return resolved;
 
   const restrict = checkRestrictedMode(resolved.policy, resolved.store, resolved.model);

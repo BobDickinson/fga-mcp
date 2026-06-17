@@ -1,6 +1,7 @@
 import type { OpenFgaClient } from "@openfga/sdk";
 import type { ServerContext } from "../../src/client.js";
 import type { FgaDefaultsConfig } from "../../src/fga-config.js";
+import { DynamicScopeStore } from "../../src/dynamic-scope-store.js";
 import { createTestPool } from "../../src/server-pool.js";
 
 function envPolicyOverlay(): { globalDefaults?: FgaDefaultsConfig } {
@@ -19,13 +20,15 @@ export function createMockContext(client: Partial<OpenFgaClient>, serverName = "
   );
   return {
     pool,
+    dynamicStore: null,
+    transport: "stdio",
     offline: false,
     fgaConfig: { default_server: serverName, servers: { [serverName]: { api_url: "http://127.0.0.1:8080" } } },
   };
 }
 
 export function createOfflineContext(): ServerContext {
-  return { pool: null, offline: true, fgaConfig: null };
+  return { pool: null, dynamicStore: null, transport: "stdio", offline: true, fgaConfig: null };
 }
 
 export function createMultiServerContext(
@@ -40,7 +43,52 @@ export function createMultiServerContext(
   );
   return {
     pool,
+    dynamicStore: null,
+    transport: "stdio",
     offline: false,
     fgaConfig: { default_server: pool.defaultServer ?? undefined, servers },
+  };
+}
+
+export function createDynamicContext(
+  options: {
+    transport?: "stdio" | "http";
+    allowRuntimeConnect?: boolean;
+    globalDefaults?: FgaDefaultsConfig;
+    dynamicConfig?: { scope_idle_ttl_seconds?: number | null; max_servers_per_scope?: number | null; max_scopes?: number | null };
+    fixedClients?: Record<string, Partial<OpenFgaClient>>;
+  } = {},
+): ServerContext {
+  const transport = options.transport ?? "stdio";
+  const allowRuntimeConnect = options.allowRuntimeConnect ?? true;
+  const globalDefaults = options.globalDefaults ?? {};
+  const pool =
+    options.fixedClients && Object.keys(options.fixedClients).length > 0
+      ? createTestPool(options.fixedClients as Record<string, OpenFgaClient>)
+      : null;
+
+  return {
+    pool,
+    dynamicStore: allowRuntimeConnect
+      ? new DynamicScopeStore({
+          transport,
+          globalDefaults,
+          config: {
+            scopeIdleTtlSeconds: options.dynamicConfig?.scope_idle_ttl_seconds ?? 86400,
+            maxServersPerScope: options.dynamicConfig?.max_servers_per_scope ?? 10,
+            maxScopes: options.dynamicConfig?.max_scopes ?? 100,
+          },
+        })
+      : null,
+    transport,
+    offline: false,
+    fgaConfig: {
+      allow_runtime_connect: allowRuntimeConnect,
+      defaults: globalDefaults,
+      dynamic: options.dynamicConfig,
+      servers: pool
+        ? Object.fromEntries([...pool.servers.keys()].map((name) => [name, { api_url: `http://127.0.0.1/${name}` }]))
+        : {},
+    },
   };
 }

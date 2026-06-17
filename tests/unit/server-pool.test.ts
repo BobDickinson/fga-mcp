@@ -47,8 +47,8 @@ describe("server pool resolution", () => {
     expect(() => resolveClient(pool, { server: "missing" })).toThrow('Unknown server "missing"');
   });
 
-  it("throws when connection_scope is passed", () => {
-    expect(() => resolveClient(pool, { connectionScope: "scope-1" })).toThrow("connection_scope is not supported");
+  it("throws when connection_scope is passed to fixed resolveClient", () => {
+    expect(() => resolveClient(pool, { connectionScope: "scope-1" })).toThrow("connection_scope requires ServerContext");
   });
 
   it("inherits per-server policy with global defaults", () => {

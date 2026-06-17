@@ -30,6 +30,26 @@ describe("parseFgaConfigDocument", () => {
     expect(Object.keys(result.config.servers ?? {})).toEqual(["dev", "prod"]);
   });
 
+  it("accepts dynamic config limits", () => {
+    const result = parseFgaConfigDocument({
+      allow_runtime_connect: true,
+      dynamic: {
+        scope_idle_ttl_seconds: 3600,
+        max_servers_per_scope: null,
+        max_scopes: 50,
+      },
+      servers: { dev: { api_url: "http://127.0.0.1:8080" } },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.dynamic).toEqual({
+      scope_idle_ttl_seconds: 3600,
+      max_servers_per_scope: null,
+      max_scopes: 50,
+    });
+  });
+
   it("rejects restrict without pins", () => {
     const result = parseFgaConfigDocument({
       servers: { prod: { api_url: "http://127.0.0.1:8080", restrict: true } },

@@ -7,36 +7,140 @@ import * as relationshipHandlers from "./handlers/relationship.js";
 import * as modelHandlers from "./handlers/model.js";
 import * as serverHandlers from "./handlers/server-management.js";
 
+const ROUTING_HINT =
+  " Targets fixed servers when connection_scope is omitted; pass connection_scope and server (from connect_server) for dynamic servers.";
+
+const connectionScopeParam = z
+  .string()
+  .optional()
+  .describe(
+    "Dynamic-tier session UUID returned by connect_server. Omit for fixed servers (startup config). Required on HTTP for dynamic-tier calls; on stdio optional when exactly one dynamic scope exists. Not used for documentation tools or verify_model.",
+  );
+
+const connectionScopeForListParam = connectionScopeParam.describe(
+  "Optional. When provided, dynamic servers for that scope are appended to servers (fixed: false). Fixed servers are always included.",
+);
+
+const connectionScopeConnectParam = connectionScopeParam.describe(
+  "Existing scope UUID to add or reconnect within. Omit on first connect to mint a new scope.",
+);
+
 const serverParam = z
   .string()
   .optional()
-  .describe("Named FGA server reference (e.g. dev, prod). Defaults to configured default_server.");
+  .describe(
+    "Server name within the resolved pool. Fixed names from unscoped list_servers; dynamic names are assigned by connect_server (authoritative — may differ from requested_name if renamed). Omit to use the default server in that pool.",
+  );
 
-const storeParam = z.string().optional().describe("OpenFGA store ID. Defaults to the server's configured default_store.");
+const defaultServerParam = z
+  .string()
+  .describe("Server name to use as default when server is omitted. Must appear in list_servers for the fixed pool or the given connection_scope.");
+
+const storeParam = z
+  .string()
+  .optional()
+  .describe(
+    "OpenFGA store ID on the resolved server. Optional when the server has default_store configured. Required when restrict: true pins a store.",
+  );
+
 const modelParam = z
   .string()
   .optional()
-  .describe('Authorization model ID. Defaults to the server default_model or "latest".');
+  .describe(
+    'Authorization model ID on the resolved store. Optional when the server has default_model configured or when using "latest". Required when restrict: true pins a model.',
+  );
+
+const routingParams = {
+  connection_scope: connectionScopeParam,
+  server: serverParam,
+};
 
 export function registerServerManagementTools(server: FastMCP, ctx: ServerContext): void {
   server.addTool({
     name: "list_servers",
-    description: "List fixed FGA server connections configured at startup.",
-    parameters: z.object({}),
-    execute: withToolLogging("list_servers", async () => {
-      const result = await serverHandlers.listServers(ctx);
+    description:
+      "Discover FGA backends. Call this first. Returns runtime_connect_enabled and fixed servers (fixed: true). If runtime_connect_enabled is false, do not call connect_server. Each server entry includes writeable and restrict. Pass connection_scope to also include dynamic servers for that scope (fixed: false) in the same servers list.",
+    parameters: z.object({
+      connection_scope: connectionScopeForListParam,
+    }),
+    execute: withToolLogging("list_servers", async ({ connection_scope }) => {
+      const result = await serverHandlers.listServers(ctx, connection_scope);
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
   });
 
   server.addTool({
     name: "set_default_server",
-    description: "Set the default FGA server reference for subsequent tool calls.",
+    description:
+      "Change which server is used when server is omitted. Without connection_scope: fixed pool only. With connection_scope: default within that dynamic scope.",
     parameters: z.object({
-      server: z.string().describe("Named FGA server reference to use as default"),
+      ...routingParams,
+      server: defaultServerParam,
     }),
-    execute: withToolLogging("set_default_server", async ({ server: serverRef }) =>
-      serverHandlers.setDefaultServerTool(ctx, serverRef),
+    execute: withToolLogging("set_default_server", async ({ server: serverRef, connection_scope }) =>
+      serverHandlers.setDefaultServerTool(ctx, serverRef, connection_scope),
+    ),
+  });
+
+  server.addTool({
+    name: "connect_server",
+    description:
+      "Register an OpenFGA backend at runtime (dynamic tier). Only when list_servers reports runtime_connect_enabled: true. First call without connection_scope mints a new scope. Returns connection_scope, assigned server, renamed, and connected. Reconnecting the same api_url within a scope upserts (same assigned name). Use returned connection_scope and server on subsequent admin and relationship tools. Inherits global defaults unless overridden on this call.",
+    parameters: z.object({
+      connection_scope: connectionScopeConnectParam,
+      requested_name: z
+        .string()
+        .optional()
+        .describe(
+          "Optional name hint (e.g. staging). Server assigns the actual server name; may suffix on collision (dev to dev-1) or derive from URL host if omitted.",
+        ),
+      api_url: z.string().describe("OpenFGA HTTP API URL (required)."),
+      api_token: z
+        .string()
+        .optional()
+        .describe("API token authentication. If set, used instead of OAuth client credentials."),
+      client_id: z.string().optional().describe("OAuth client ID. Required with client_secret, issuer, and audience when not using api_token."),
+      client_secret: z.string().optional().describe("OAuth client secret."),
+      issuer: z.string().optional().describe("OAuth token issuer URL."),
+      audience: z.string().optional().describe("OAuth API audience."),
+      label: z.string().optional().describe("Optional display label for this connection."),
+      default_store: z
+        .string()
+        .optional()
+        .describe("Optional default store ID for this dynamic server when tool args omit store."),
+      default_model: z
+        .string()
+        .optional()
+        .describe("Optional default model ID for this dynamic server when tool args omit model."),
+      restrict: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, only pinned default_store and default_model are allowed. Default inherits from FGA config defaults.restrict.",
+        ),
+      writeable: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, allow mutations (create/delete stores, models, tuples). Default false unless inherited from defaults.writeable.",
+        ),
+    }),
+    execute: withToolLogging("connect_server", async (args) => {
+      const result = await serverHandlers.connectServer(ctx, args);
+      return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    }),
+  });
+
+  server.addTool({
+    name: "disconnect_server",
+    description:
+      "Disconnect a dynamic FGA server from a connection scope. Removing the last server in a scope deletes the scope; the next connect_server without connection_scope mints a new UUID.",
+    parameters: z.object({
+      connection_scope: z.string().describe("Dynamic connection scope UUID from connect_server."),
+      server: z.string().describe("Assigned server name from connect_server (not requested_name if they differ)."),
+    }),
+    execute: withToolLogging("disconnect_server", async ({ connection_scope, server: serverRef }) =>
+      serverHandlers.disconnectServer(ctx, connection_scope, serverRef),
     ),
   });
 }
@@ -44,43 +148,47 @@ export function registerServerManagementTools(server: FastMCP, ctx: ServerContex
 export function registerStoreTools(server: FastMCP, ctx: ServerContext): void {
   server.addTool({
     name: "create_store",
-    description: "Create a new OpenFGA store.",
+    description: `Create a new OpenFGA store. Requires writeable: true on the target server.${ROUTING_HINT}`,
     parameters: z.object({
-      name: z.string().describe("The name of the store to create"),
-      server: serverParam,
+      name: z.string().describe("Display name for the new store (not unique; use returned store ID for later calls)."),
+      ...routingParams,
     }),
-    execute: withToolLogging("create_store", async ({ name, server }) => storeHandlers.createStore(ctx, name, server)),
+    execute: withToolLogging("create_store", async ({ name, server, connection_scope }) =>
+      storeHandlers.createStore(ctx, name, server, connection_scope),
+    ),
   });
 
   server.addTool({
     name: "delete_store",
-    description: "Delete an OpenFGA store.",
+    description: `Delete an OpenFGA store. Requires writeable: true on the target server. restrict may block non-pinned stores.${ROUTING_HINT}`,
     parameters: z.object({
-      id: z.string().describe("The ID of the store to delete"),
-      server: serverParam,
+      id: z.string().describe("Store ID to delete."),
+      ...routingParams,
     }),
-    execute: withToolLogging("delete_store", async ({ id, server }) => storeHandlers.deleteStore(ctx, id, server)),
+    execute: withToolLogging("delete_store", async ({ id, server, connection_scope }) =>
+      storeHandlers.deleteStore(ctx, id, server, connection_scope),
+    ),
   });
 
   server.addTool({
     name: "get_store",
-    description: "Get an OpenFGA store details.",
+    description: `Get OpenFGA store details by ID. restrict may reject stores other than the pinned default_store.${ROUTING_HINT}`,
     parameters: z.object({
-      id: z.string().describe("The ID of the store to get details for"),
-      server: serverParam,
+      id: z.string().describe("Store ID to fetch."),
+      ...routingParams,
     }),
-    execute: withToolLogging("get_store", async ({ id, server }) => {
-      const result = await storeHandlers.getStore(ctx, id, server);
+    execute: withToolLogging("get_store", async ({ id, server, connection_scope }) => {
+      const result = await storeHandlers.getStore(ctx, id, server, connection_scope);
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
   });
 
   server.addTool({
     name: "list_stores",
-    description: "List all OpenFGA stores on a FGA server.",
-    parameters: z.object({ server: serverParam }),
-    execute: withToolLogging("list_stores", async ({ server }) => {
-      const result = await storeHandlers.listStores(ctx, server);
+    description: `List OpenFGA stores on a FGA server. Use list_servers first to discover server names and runtime_connect_enabled.${ROUTING_HINT}`,
+    parameters: z.object({ ...routingParams }),
+    execute: withToolLogging("list_stores", async ({ server, connection_scope }) => {
+      const result = await storeHandlers.listStores(ctx, server, connection_scope);
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
   });
@@ -88,17 +196,17 @@ export function registerStoreTools(server: FastMCP, ctx: ServerContext): void {
 
 export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): void {
   const tupleParams = z.object({
-    server: serverParam,
+    ...routingParams,
     store: storeParam,
     model: modelParam,
-    user: z.string().describe("ID of the user"),
-    relation: z.string().describe("Relation to check"),
-    object: z.string().describe("ID of the object"),
+    user: z.string().describe("Subject in OpenFGA format, e.g. user:alice or group:eng#member."),
+    relation: z.string().describe("Relation name from the authorization model, e.g. reader or writer."),
+    object: z.string().describe("Object in OpenFGA format, e.g. document:budget."),
   });
 
   server.addTool({
     name: "check_permission",
-    description: 'Check if something has a relation to an object (e.g., can "user:1" read "document:1").',
+    description: `Check if a subject has a relation on an object (OpenFGA Check). Read-only. store and model optional when server defaults are configured.${ROUTING_HINT}`,
     parameters: tupleParams,
     execute: withToolLogging("check_permission", async (args) =>
       relationshipHandlers.checkPermission(
@@ -109,13 +217,14 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.relation,
         args.object,
         args.server,
+        args.connection_scope,
       ),
     ),
   });
 
   server.addTool({
     name: "grant_permission",
-    description: "Grant permission to something on an object.",
+    description: `Write a relationship tuple (grant permission). Requires writeable: true on the target server.${ROUTING_HINT}`,
     parameters: tupleParams,
     execute: withToolLogging("grant_permission", async (args) =>
       relationshipHandlers.grantPermission(
@@ -126,13 +235,14 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.relation,
         args.object,
         args.server,
+        args.connection_scope,
       ),
     ),
   });
 
   server.addTool({
     name: "revoke_permission",
-    description: "Revoke permission from something on an object.",
+    description: `Delete a relationship tuple (revoke permission). Requires writeable: true on the target server.${ROUTING_HINT}`,
     parameters: tupleParams,
     execute: withToolLogging("revoke_permission", async (args) =>
       relationshipHandlers.revokePermission(
@@ -143,20 +253,21 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.relation,
         args.object,
         args.server,
+        args.connection_scope,
       ),
     ),
   });
 
   server.addTool({
     name: "list_objects",
-    description: "List objects of a type that something has a relation to.",
+    description: `List objects of a type a user can access via a relation (OpenFGA ListObjects). store and model optional when server defaults are configured.${ROUTING_HINT}`,
     parameters: z.object({
-      server: serverParam,
+      ...routingParams,
       store: storeParam,
       model: modelParam,
-      type: z.string().describe("Type of objects to list"),
-      user: z.string(),
-      relation: z.string(),
+      type: z.string().describe("Object type prefix to list, e.g. document for document:* objects."),
+      user: z.string().describe("Subject in OpenFGA format, e.g. user:alice."),
+      relation: z.string().describe("Relation name, e.g. reader."),
     }),
     execute: withToolLogging("list_objects", async (args) => {
       const result = await relationshipHandlers.listObjects(
@@ -167,6 +278,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.user,
         args.relation,
         args.server,
+        args.connection_scope,
       );
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
@@ -174,13 +286,13 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
 
   server.addTool({
     name: "list_users",
-    description: "List users that have a given relationship with a given object.",
+    description: `List users or subjects with a relation on an object (OpenFGA ListUsers). store and model optional when server defaults are configured.${ROUTING_HINT}`,
     parameters: z.object({
-      server: serverParam,
+      ...routingParams,
       store: storeParam,
       model: modelParam,
-      object: z.string(),
-      relation: z.string(),
+      object: z.string().describe("Object in OpenFGA format, e.g. document:budget."),
+      relation: z.string().describe("Relation name, e.g. reader."),
     }),
     execute: withToolLogging("list_users", async (args) => {
       const result = await relationshipHandlers.listUsers(
@@ -190,6 +302,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.object,
         args.relation,
         args.server,
+        args.connection_scope,
       );
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
@@ -199,49 +312,52 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
 export function registerModelTools(server: FastMCP, ctx: ServerContext): void {
   server.addTool({
     name: "create_model",
-    description: "Create a new authorization model using OpenFGA's DSL syntax.",
+    description: `Create an authorization model from OpenFGA DSL. Requires writeable: true on the target server.${ROUTING_HINT}`,
     parameters: z.object({
-      dsl: z.string().describe("DSL representing the authorization model to create"),
-      store: storeParam.describe("ID of the store to create the authorization model in"),
-      server: serverParam,
+      dsl: z.string().describe("OpenFGA authorization model DSL (schema 1.1)."),
+      store: storeParam.describe("Store ID to write the model to. Required unless server default_store is configured."),
+      ...routingParams,
     }),
-    execute: withToolLogging("create_model", async ({ dsl, store, server }) =>
-      modelHandlers.createModel(ctx, dsl, store, server),
+    execute: withToolLogging("create_model", async ({ dsl, store, server, connection_scope }) =>
+      modelHandlers.createModel(ctx, dsl, store, server, connection_scope),
     ),
   });
 
   server.addTool({
     name: "get_model",
-    description: "Get a specific authorization model from a particular store.",
-    parameters: z.object({ server: serverParam, store: storeParam, model: modelParam }),
-    execute: withToolLogging("get_model", async ({ store, model, server }) =>
-      modelHandlers.getModel(ctx, store, model, server),
+    description: `Get authorization model metadata from a store.${ROUTING_HINT}`,
+    parameters: z.object({ ...routingParams, store: storeParam, model: modelParam }),
+    execute: withToolLogging("get_model", async ({ store, model, server, connection_scope }) =>
+      modelHandlers.getModel(ctx, store, model, server, connection_scope),
     ),
   });
 
   server.addTool({
     name: "get_model_dsl",
-    description: "Get the DSL from a specific authorization model from a particular store.",
-    parameters: z.object({ server: serverParam, store: storeParam, model: modelParam }),
-    execute: withToolLogging("get_model_dsl", async ({ store, model, server }) =>
-      modelHandlers.getModelDsl(ctx, store, model, server),
+    description: `Get authorization model as OpenFGA DSL text.${ROUTING_HINT}`,
+    parameters: z.object({ ...routingParams, store: storeParam, model: modelParam }),
+    execute: withToolLogging("get_model_dsl", async ({ store, model, server, connection_scope }) =>
+      modelHandlers.getModelDsl(ctx, store, model, server, connection_scope),
     ),
   });
 
   server.addTool({
     name: "list_models",
-    description: "List authorization models in a store, sorted in descending order of creation.",
-    parameters: z.object({ server: serverParam, store: storeParam }),
-    execute: withToolLogging("list_models", async ({ store, server }) => {
-      const result = await modelHandlers.listModels(ctx, store, server);
+    description: `List authorization models in a store, newest first.${ROUTING_HINT}`,
+    parameters: z.object({ ...routingParams, store: storeParam }),
+    execute: withToolLogging("list_models", async ({ store, server, connection_scope }) => {
+      const result = await modelHandlers.listModels(ctx, store, server, connection_scope);
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
   });
 
   server.addTool({
     name: "verify_model",
-    description: "Verify a DSL representation of an authorization model.",
-    parameters: z.object({ dsl: z.string() }),
+    description:
+      "Validate OpenFGA DSL locally. Does not contact OpenFGA; ignores connection_scope, server, store, and model. Works offline.",
+    parameters: z.object({
+      dsl: z.string().describe("OpenFGA authorization model DSL (schema 1.1) to validate."),
+    }),
     execute: withToolLogging("verify_model", async ({ dsl }) => modelHandlers.verifyModel(ctx, dsl)),
   });
 }

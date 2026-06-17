@@ -58,6 +58,21 @@ describe("createServerContext", () => {
     expect(ctx.pool?.servers.size).toBe(1);
   });
 
+  it("returns online dynamic-only context when runtime connect is enabled", async () => {
+    setEnv(
+      "OPENFGA_MCP_CONFIG",
+      JSON.stringify({
+        allow_runtime_connect: true,
+        dynamic: { max_scopes: 5 },
+      }),
+    );
+    const ctx = await createServerContext(undefined, { transport: "http" });
+    expect(ctx.offline).toBe(false);
+    expect(ctx.pool).toBeNull();
+    expect(ctx.dynamicStore).not.toBeNull();
+    expect(ctx.transport).toBe("http");
+  });
+
   it("throws when FGA config is invalid", async () => {
     setEnv(
       "OPENFGA_MCP_CONFIG",
@@ -76,17 +91,17 @@ describe("requirePool", () => {
   });
 
   it("throws in offline mode", () => {
-    expect(() => requirePool(createOfflineContext())).toThrow("OpenFGA server pool is not available in offline mode");
+    expect(() => requirePool(createOfflineContext())).toThrow("OpenFGA fixed server pool is not available");
   });
 });
 
 describe("requireClient", () => {
   it("throws in offline mode", () => {
-    expect(() => requireClient(createOfflineContext())).toThrow("offline mode");
+    expect(() => requireClient(createOfflineContext())).toThrow(/OpenFGA server pool is not available/);
   });
 
   it("provides a helpful error message referencing offline pool", () => {
-    expect(() => requireClient(createOfflineContext())).toThrow(/OpenFGA server pool is not available in offline mode/);
+    expect(() => requireClient(createOfflineContext())).toThrow(/Configure fixed servers or use connect_server/);
   });
 
   it("resolves the default server client", () => {
