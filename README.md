@@ -2,7 +2,7 @@
 
 TypeScript MCP server for [OpenFGA](https://openfga.dev/) and [Auth0 FGA](https://auth0.com/fine-grained-authorization). Gives agents tools, resources, prompts, and bundled documentation for working with fine-grained authorization — with or without a live OpenFGA server. 
 
-Derived from the PHP-based [openfga-mcp](https://github.com/evansims/openfga-mcp) by Evan Sims ([Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)). This TypeScript port has the same configuration, tools, resources, prompts, and documentation features. The model authoring guide ([`docs/AUTHORING_OPENFGA_MODELS.md`](docs/AUTHORING_OPENFGA_MODELS.md)) is adapted from [openfga-modeling-mcp](https://github.com/aaguiarz/openfga-modeling-mcp) by [Andrés Aguiar](https://github.com/aaguiarz) ([MIT](https://opensource.org/licenses/MIT)).
+Derived from the PHP-based [openfga-mcp](https://github.com/evansims/openfga-mcp) by [Evan Sims](https://github.com/evansims) ([Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)). This TypeScript port has the same configuration, tools, resources, prompts, and documentation features. The model authoring guide ([`docs/AUTHORING_OPENFGA_MODELS.md`](docs/AUTHORING_OPENFGA_MODELS.md)) is adapted from [openfga-modeling-mcp](https://github.com/aaguiarz/openfga-modeling-mcp) by [Andrés Aguiar](https://github.com/aaguiarz) ([MIT](https://opensource.org/licenses/MIT)).
 
 Built with [FastMCP](https://github.com/punkpeye/fastmcp), [@modelcontextprotocol/sdk](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [@openfga/sdk](https://www.npmjs.com/package/@openfga/sdk), and [@openfga/syntax-transformer](https://www.npmjs.com/package/@openfga/syntax-transformer). Requires Node.js **20+**.
 
