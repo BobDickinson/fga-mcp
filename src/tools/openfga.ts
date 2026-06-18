@@ -1,6 +1,9 @@
 import { z } from "zod";
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { UserError } from "fastmcp";
 import type { FastMCP } from "fastmcp";
 import type { ServerContext } from "../client.js";
+import type { ToolCallContext } from "../elicitation/types.js";
 import { withToolLogging } from "../tool-logging.js";
 import * as storeHandlers from "./handlers/store.js";
 import * as relationshipHandlers from "./handlers/relationship.js";
@@ -55,6 +58,17 @@ const routingParams = {
   server: serverParam,
 };
 
+function toolContext(mcpCtx: { sessionId?: string }): ToolCallContext {
+  return { sessionId: mcpCtx.sessionId };
+}
+
+function isElicitationError(error: unknown): boolean {
+  return (
+    error instanceof UserError ||
+    (error instanceof McpError && error.code === ErrorCode.UrlElicitationRequired)
+  );
+}
+
 export function registerServerManagementTools(server: FastMCP, ctx: ServerContext): void {
   server.addTool({
     name: "list_servers",
@@ -94,19 +108,14 @@ export function registerServerManagementTools(server: FastMCP, ctx: ServerContex
         .describe(
           "Optional name hint (e.g. staging). Server assigns the actual server name; may suffix on collision (dev to dev-1) or derive from URL host if omitted.",
         ),
-      api_url: z.string().describe("OpenFGA HTTP API URL (required)."),
-      api_token: z
+      api_url: z
         .string()
         .optional()
-        .describe("API token authentication. If set, used instead of OAuth client credentials."),
-      client_id: z.string().optional().describe("OAuth client ID. Required with client_secret, issuer, and audience when not using api_token."),
-      client_secret: z.string().optional().describe("OAuth client secret."),
-      issuer: z.string().optional().describe("OAuth token issuer URL."),
-      audience: z.string().optional().describe("OAuth API audience."),
-      scopes: z
+        .describe("OpenFGA HTTP API URL for dynamic connect when dynamic_connections_enabled is true."),
+      server: z
         .string()
         .optional()
-        .describe("Optional space-separated OAuth scopes for client credentials."),
+        .describe("Fixed config server name when list_servers reports auth_status connect_required."),
       label: z.string().optional().describe("Optional display label for this connection."),
       default_store: z
         .string()
@@ -129,9 +138,15 @@ export function registerServerManagementTools(server: FastMCP, ctx: ServerContex
           "If true, allow mutations (create/delete stores, models, tuples). Default false unless inherited from defaults.writeable.",
         ),
     }),
-    execute: withToolLogging("connect_server", async (args) => {
-      const result = await serverHandlers.connectServer(ctx, args);
-      return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+    execute: withToolLogging("connect_server", async (args, mcpCtx) => {
+      try {
+        const result = await serverHandlers.connectServer(ctx, args, toolContext(mcpCtx));
+        return typeof result === "string" ? result : JSON.stringify(result, null, 2);
+      } catch (error) {
+        if (isElicitationError(error)) throw error;
+        const message = error instanceof Error ? error.message : String(error);
+        return `❌ Failed to connect server! Error: ${message}`;
+      }
     }),
   });
 
@@ -157,8 +172,8 @@ export function registerStoreTools(server: FastMCP, ctx: ServerContext): void {
       name: z.string().describe("Display name for the new store (not unique; use returned store ID for later calls)."),
       ...routingParams,
     }),
-    execute: withToolLogging("create_store", async ({ name, server, connection_scope }) =>
-      storeHandlers.createStore(ctx, name, server, connection_scope),
+    execute: withToolLogging("create_store", async ({ name, server, connection_scope }, mcpCtx) =>
+      storeHandlers.createStore(ctx, name, server, connection_scope, toolContext(mcpCtx)),
     ),
   });
 
@@ -169,8 +184,8 @@ export function registerStoreTools(server: FastMCP, ctx: ServerContext): void {
       id: z.string().describe("Store ID to delete."),
       ...routingParams,
     }),
-    execute: withToolLogging("delete_store", async ({ id, server, connection_scope }) =>
-      storeHandlers.deleteStore(ctx, id, server, connection_scope),
+    execute: withToolLogging("delete_store", async ({ id, server, connection_scope }, mcpCtx) =>
+      storeHandlers.deleteStore(ctx, id, server, connection_scope, toolContext(mcpCtx)),
     ),
   });
 
@@ -181,8 +196,8 @@ export function registerStoreTools(server: FastMCP, ctx: ServerContext): void {
       id: z.string().describe("Store ID to fetch."),
       ...routingParams,
     }),
-    execute: withToolLogging("get_store", async ({ id, server, connection_scope }) => {
-      const result = await storeHandlers.getStore(ctx, id, server, connection_scope);
+    execute: withToolLogging("get_store", async ({ id, server, connection_scope }, mcpCtx) => {
+      const result = await storeHandlers.getStore(ctx, id, server, connection_scope, toolContext(mcpCtx));
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
   });
@@ -191,8 +206,8 @@ export function registerStoreTools(server: FastMCP, ctx: ServerContext): void {
     name: "list_stores",
     description: `List OpenFGA stores on a FGA server. Use list_servers first for auth_status and dynamic_connections_enabled.${ROUTING_HINT}`,
     parameters: z.object({ ...routingParams }),
-    execute: withToolLogging("list_stores", async ({ server, connection_scope }) => {
-      const result = await storeHandlers.listStores(ctx, server, connection_scope);
+    execute: withToolLogging("list_stores", async ({ server, connection_scope }, mcpCtx) => {
+      const result = await storeHandlers.listStores(ctx, server, connection_scope, toolContext(mcpCtx));
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
   });
@@ -212,7 +227,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
     name: "check_permission",
     description: `Check if a subject has a relation on an object (OpenFGA Check). Read-only. store and model optional when server defaults are configured.${ROUTING_HINT}`,
     parameters: tupleParams,
-    execute: withToolLogging("check_permission", async (args) =>
+    execute: withToolLogging("check_permission", async (args, mcpCtx) =>
       relationshipHandlers.checkPermission(
         ctx,
         args.store,
@@ -222,6 +237,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.object,
         args.server,
         args.connection_scope,
+        toolContext(mcpCtx),
       ),
     ),
   });
@@ -230,7 +246,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
     name: "grant_permission",
     description: `Write a relationship tuple (grant permission). Requires writeable: true on the target server.${ROUTING_HINT}`,
     parameters: tupleParams,
-    execute: withToolLogging("grant_permission", async (args) =>
+    execute: withToolLogging("grant_permission", async (args, mcpCtx) =>
       relationshipHandlers.grantPermission(
         ctx,
         args.store,
@@ -240,6 +256,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.object,
         args.server,
         args.connection_scope,
+        toolContext(mcpCtx),
       ),
     ),
   });
@@ -248,7 +265,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
     name: "revoke_permission",
     description: `Delete a relationship tuple (revoke permission). Requires writeable: true on the target server.${ROUTING_HINT}`,
     parameters: tupleParams,
-    execute: withToolLogging("revoke_permission", async (args) =>
+    execute: withToolLogging("revoke_permission", async (args, mcpCtx) =>
       relationshipHandlers.revokePermission(
         ctx,
         args.store,
@@ -258,6 +275,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.object,
         args.server,
         args.connection_scope,
+        toolContext(mcpCtx),
       ),
     ),
   });
@@ -273,7 +291,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
       user: z.string().describe("Subject in OpenFGA format, e.g. user:alice."),
       relation: z.string().describe("Relation name, e.g. reader."),
     }),
-    execute: withToolLogging("list_objects", async (args) => {
+    execute: withToolLogging("list_objects", async (args, mcpCtx) => {
       const result = await relationshipHandlers.listObjects(
         ctx,
         args.store,
@@ -283,6 +301,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.relation,
         args.server,
         args.connection_scope,
+        toolContext(mcpCtx),
       );
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
@@ -298,7 +317,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
       object: z.string().describe("Object in OpenFGA format, e.g. document:budget."),
       relation: z.string().describe("Relation name, e.g. reader."),
     }),
-    execute: withToolLogging("list_users", async (args) => {
+    execute: withToolLogging("list_users", async (args, mcpCtx) => {
       const result = await relationshipHandlers.listUsers(
         ctx,
         args.store,
@@ -307,6 +326,7 @@ export function registerRelationshipTools(server: FastMCP, ctx: ServerContext): 
         args.relation,
         args.server,
         args.connection_scope,
+        toolContext(mcpCtx),
       );
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
@@ -322,8 +342,8 @@ export function registerModelTools(server: FastMCP, ctx: ServerContext): void {
       store: storeParam.describe("Store ID to write the model to. Required unless server default_store is configured."),
       ...routingParams,
     }),
-    execute: withToolLogging("create_model", async ({ dsl, store, server, connection_scope }) =>
-      modelHandlers.createModel(ctx, dsl, store, server, connection_scope),
+    execute: withToolLogging("create_model", async ({ dsl, store, server, connection_scope }, mcpCtx) =>
+      modelHandlers.createModel(ctx, dsl, store, server, connection_scope, toolContext(mcpCtx)),
     ),
   });
 
@@ -331,8 +351,8 @@ export function registerModelTools(server: FastMCP, ctx: ServerContext): void {
     name: "get_model",
     description: `Get authorization model metadata from a store.${ROUTING_HINT}`,
     parameters: z.object({ ...routingParams, store: storeParam, model: modelParam }),
-    execute: withToolLogging("get_model", async ({ store, model, server, connection_scope }) =>
-      modelHandlers.getModel(ctx, store, model, server, connection_scope),
+    execute: withToolLogging("get_model", async ({ store, model, server, connection_scope }, mcpCtx) =>
+      modelHandlers.getModel(ctx, store, model, server, connection_scope, toolContext(mcpCtx)),
     ),
   });
 
@@ -340,8 +360,8 @@ export function registerModelTools(server: FastMCP, ctx: ServerContext): void {
     name: "get_model_dsl",
     description: `Get authorization model as OpenFGA DSL text.${ROUTING_HINT}`,
     parameters: z.object({ ...routingParams, store: storeParam, model: modelParam }),
-    execute: withToolLogging("get_model_dsl", async ({ store, model, server, connection_scope }) =>
-      modelHandlers.getModelDsl(ctx, store, model, server, connection_scope),
+    execute: withToolLogging("get_model_dsl", async ({ store, model, server, connection_scope }, mcpCtx) =>
+      modelHandlers.getModelDsl(ctx, store, model, server, connection_scope, toolContext(mcpCtx)),
     ),
   });
 
@@ -349,8 +369,8 @@ export function registerModelTools(server: FastMCP, ctx: ServerContext): void {
     name: "list_models",
     description: `List authorization models in a store, newest first.${ROUTING_HINT}`,
     parameters: z.object({ ...routingParams, store: storeParam }),
-    execute: withToolLogging("list_models", async ({ store, server, connection_scope }) => {
-      const result = await modelHandlers.listModels(ctx, store, server, connection_scope);
+    execute: withToolLogging("list_models", async ({ store, server, connection_scope }, mcpCtx) => {
+      const result = await modelHandlers.listModels(ctx, store, server, connection_scope, toolContext(mcpCtx));
       return typeof result === "string" ? result : JSON.stringify(result, null, 2);
     }),
   });

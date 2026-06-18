@@ -1,12 +1,20 @@
 import { resolveAdminTarget } from "../../admin-context.js";
 import { checkOfflineMode, checkRestrictedMode, checkWritePermission } from "../../guards.js";
 import type { ServerContext } from "../../client.js";
+import type { ToolCallContext } from "../../elicitation/types.js";
+import { formatFgaApiError } from "./fga-api-error.js";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-export async function createStore(ctx: ServerContext, name: string, server?: string, connectionScope?: string): Promise<string> {
+export async function createStore(
+  ctx: ServerContext,
+  name: string,
+  server?: string,
+  connectionScope?: string,
+  toolCtx?: ToolCallContext,
+): Promise<string> {
   const offline = checkOfflineMode(ctx, "Creating stores");
   if (offline) return offline;
 
@@ -20,11 +28,17 @@ export async function createStore(ctx: ServerContext, name: string, server?: str
     const response = await resolved.client.createStore({ name });
     return `✅ Successfully created store named ${name}! Store names are not unique identifiers, so please use the ID ${response.id} for future queries relating to this specific store.`;
   } catch (e) {
-    return `❌ Failed to create store! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to create store!");
   }
 }
 
-export async function deleteStore(ctx: ServerContext, id: string, server?: string, connectionScope?: string): Promise<string> {
+export async function deleteStore(
+  ctx: ServerContext,
+  id: string,
+  server?: string,
+  connectionScope?: string,
+  toolCtx?: ToolCallContext,
+): Promise<string> {
   const offline = checkOfflineMode(ctx, "Deleting stores");
   if (offline) return offline;
 
@@ -41,7 +55,7 @@ export async function deleteStore(ctx: ServerContext, id: string, server?: strin
     await resolved.client.deleteStore({ storeId: id });
     return "✅ Successfully deleted store!";
   } catch (e) {
-    return `❌ Failed to delete store! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to delete store!");
   }
 }
 
@@ -50,6 +64,7 @@ export async function getStore(
   id: string,
   server?: string,
   connectionScope?: string,
+  toolCtx?: ToolCallContext,
 ): Promise<string | Record<string, unknown>> {
   const offline = checkOfflineMode(ctx, "Getting store details");
   if (offline) return offline;
@@ -70,11 +85,16 @@ export async function getStore(
       deleted_at: store.deleted_at ?? null,
     };
   } catch (e) {
-    return `❌ Failed to get store! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to get store!");
   }
 }
 
-export async function listStores(ctx: ServerContext, server?: string, connectionScope?: string): Promise<string | Array<Record<string, unknown>>> {
+export async function listStores(
+  ctx: ServerContext,
+  server?: string,
+  connectionScope?: string,
+  toolCtx?: ToolCallContext,
+): Promise<string | Array<Record<string, unknown>>> {
   const offline = checkOfflineMode(ctx, "Listing stores");
   if (offline) return offline;
 
@@ -91,6 +111,6 @@ export async function listStores(ctx: ServerContext, server?: string, connection
       deleted_at: store.deleted_at ?? null,
     }));
   } catch (e) {
-    return `❌ Failed to list stores! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to list stores!");
   }
 }

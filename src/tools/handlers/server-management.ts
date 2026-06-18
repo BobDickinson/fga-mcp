@@ -1,8 +1,13 @@
 import { checkOfflineMode } from "../../guards.js";
-import { isDynamicConnectionsEnabled, requireDynamicStore } from "../../connection-resolver.js";
+import {
+  hasScopeStore,
+  isDynamicConnectionsEnabled,
+  requireScopeStore,
+} from "../../connection-resolver.js";
 import { requirePool, type ServerContext } from "../../client.js";
 import { listFixedServers, setDefaultServer as setFixedDefaultServer } from "../../server-pool.js";
-import type { ConnectServerInput } from "../../dynamic-scope-store.js";
+import { executeConnectServer, type ConnectServerToolInput } from "../../connect-flow.js";
+import type { ToolCallContext } from "../../elicitation/types.js";
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -13,13 +18,13 @@ function listServersOfflineGuard(ctx: ServerContext): string | null {
     return checkOfflineMode(ctx, "Listing FGA servers");
   }
   const hasFixed = (ctx.pool?.servers.size ?? 0) > 0;
-  if (hasFixed || isDynamicConnectionsEnabled(ctx)) return null;
+  if (hasFixed || hasScopeStore(ctx)) return null;
   return checkOfflineMode(ctx, "Listing FGA servers");
 }
 
 function listFixedServersOrEmpty(ctx: ServerContext) {
   if (!ctx.pool || ctx.pool.servers.size === 0) return [];
-  return listFixedServers(ctx.pool);
+  return listFixedServers(ctx.pool, ctx.connectRequiredServers);
 }
 
 export async function listServers(
@@ -39,14 +44,14 @@ export async function listServers(
   const scope = connectionScope?.trim();
   if (!scope) return response;
 
-  if (!dynamicConnectionsEnabled) {
-    return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
+  if (!hasScopeStore(ctx)) {
+    return "❌ No connection scopes are available. Call connect_server first.";
   }
 
   try {
-    const dynamicServers = requireDynamicStore(ctx).listServers(scope);
+    const scopedServers = requireScopeStore(ctx).listServers(scope);
     response.connection_scope = scope;
-    response.servers = [...fixedServers, ...dynamicServers];
+    response.servers = scopedServers;
     return response;
   } catch (error) {
     return `❌ ${errorMessage(error)}`;
@@ -60,11 +65,11 @@ export async function setDefaultServerTool(
 ): Promise<string> {
   const scope = connectionScope?.trim();
   if (scope) {
-    if (!isDynamicConnectionsEnabled(ctx)) {
-      return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
+    if (!hasScopeStore(ctx)) {
+      return "❌ No connection scopes are available.";
     }
     try {
-      requireDynamicStore(ctx).setDefaultServer(scope, server);
+      requireScopeStore(ctx).setDefaultServer(scope, server);
       return `✅ Default server set to "${server}" in connection scope ${scope}.`;
     } catch (error) {
       return `❌ Failed to set default server! Error: ${errorMessage(error)}`;
@@ -83,68 +88,25 @@ export async function setDefaultServerTool(
   }
 }
 
-export type ConnectServerToolInput = {
-  connection_scope?: string;
-  requested_name?: string;
-  api_url: string;
-  api_token?: string;
-  client_id?: string;
-  client_secret?: string;
-  issuer?: string;
-  audience?: string;
-  scopes?: string;
-  label?: string;
-  default_store?: string;
-  default_model?: string;
-  restrict?: boolean;
-  writeable?: boolean;
-};
+export type ConnectServerToolInputExport = ConnectServerToolInput;
 
 export async function connectServer(
   ctx: ServerContext,
   input: ConnectServerToolInput,
+  toolCtx?: ToolCallContext,
 ): Promise<string | Record<string, unknown>> {
-  if (!isDynamicConnectionsEnabled(ctx)) {
-    return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
-  }
-
-  if (!input.api_url?.trim()) {
-    return "❌ connect_server requires api_url.";
-  }
-
-  const payload: ConnectServerInput = {
-    connectionScope: input.connection_scope,
-    requestedName: input.requested_name,
-    apiUrl: input.api_url,
-    apiToken: input.api_token,
-    clientId: input.client_id,
-    clientSecret: input.client_secret,
-    issuer: input.issuer,
-    audience: input.audience,
-    scopes: input.scopes,
-    label: input.label,
-    defaultStore: input.default_store,
-    defaultModel: input.default_model,
-    restrict: input.restrict,
-    writeable: input.writeable,
+  const result = await executeConnectServer(ctx, input, toolCtx);
+  const response: Record<string, unknown> = {
+    connection_scope: result.connectionScope,
+    server: result.server,
+    renamed: result.renamed,
+    connected: result.connected,
+    api_url: result.apiUrl,
   };
-
-  try {
-    const result = await requireDynamicStore(ctx).connectServer(payload);
-    const response: Record<string, unknown> = {
-      connection_scope: result.connectionScope,
-      server: result.server,
-      renamed: result.renamed,
-      connected: result.connected,
-      api_url: result.apiUrl,
-    };
-    if (result.requestedName !== undefined) {
-      response.requested_name = result.requestedName;
-    }
-    return response;
-  } catch (error) {
-    return `❌ Failed to connect server! Error: ${errorMessage(error)}`;
+  if (result.requestedName !== undefined) {
+    response.requested_name = result.requestedName;
   }
+  return response;
 }
 
 export async function disconnectServer(
@@ -152,8 +114,8 @@ export async function disconnectServer(
   connectionScope: string,
   server: string,
 ): Promise<string> {
-  if (!isDynamicConnectionsEnabled(ctx)) {
-    return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
+  if (!hasScopeStore(ctx)) {
+    return "❌ No connection scopes are available.";
   }
 
   if (!connectionScope?.trim()) {
@@ -165,7 +127,7 @@ export async function disconnectServer(
   }
 
   try {
-    requireDynamicStore(ctx).disconnectServer(connectionScope.trim(), server.trim());
+    requireScopeStore(ctx).disconnectServer(connectionScope.trim(), server.trim());
     return `✅ Disconnected server "${server}" from scope ${connectionScope}.`;
   } catch (error) {
     return `❌ Failed to disconnect server! Error: ${errorMessage(error)}`;

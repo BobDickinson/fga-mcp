@@ -4,6 +4,8 @@ TypeScript MCP server for [OpenFGA](https://openfga.dev/) and [Auth0 FGA](https:
 
 Derived from the PHP-based [openfga-mcp](https://github.com/evansims/openfga-mcp) by [Evan Sims](https://github.com/evansims) ([Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)). This TypeScript port has the same configuration, tools, resources, prompts, and documentation features. The model authoring guide ([`docs/AUTHORING_OPENFGA_MODELS.md`](docs/AUTHORING_OPENFGA_MODELS.md)) is adapted from [openfga-modeling-mcp](https://github.com/aaguiarz/openfga-modeling-mcp) by [Andrés Aguiar](https://github.com/aaguiarz) ([MIT](https://opensource.org/licenses/MIT)).
 
+This MCP server also adds support for multiple configured FGA servers, dynamic FGA server connections, and agent-isolated (out-of-band) authentication to FGA servers that require authentication.
+
 Built with [FastMCP](https://github.com/punkpeye/fastmcp), [@modelcontextprotocol/sdk](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [@openfga/sdk](https://www.npmjs.com/package/@openfga/sdk), and [@openfga/syntax-transformer](https://www.npmjs.com/package/@openfga/syntax-transformer). Requires Node.js **20+**.
 
 ## Operating modes
@@ -23,13 +25,17 @@ Use offline mode when you want an agent to:
 
 ### Online — fixed servers
 
-Supply an **FGA config file** (`--config`) with one or more named servers (`dev`, `prod`, …). fga-mcp connects to those OpenFGA servers at startup. Agents call tools and read resources **without managing connections** — they pass an optional `server` name (or rely on `default_server`) and optional `store` / `model`.
+Supply an **FGA config file** (`--config`) with one or more named servers (`dev`, `prod`, …). fga-mcp loads those profiles at startup.
 
-Fixed servers are the default production pattern: credentials and policy live in your config file, and agents use the same tools and resources against those preconfigured servers.
+When a server has an **`auth` block** in config (or FGA allows unauthenticated access), agents call tools and read resources **without managing connections** — they pass an optional `server` name (or rely on `default_server`) and optional `store` / `model`. That is the usual production pattern: credentials and policy live in your config file.
+
+When a fixed server is listed in config **without** `auth` but the OpenFGA backend requires authentication, credentials are collected at runtime via an **out-of-band browser flow** (HTTP only). Call `connect_server({ server })` when `list_servers` shows `auth_status: connect_required`. See [Runtime authentication](#runtime-authentication).
 
 ### Online — dynamic servers (optional)
 
-When `allow_dynamic_connections: true` in the FGA config, agents can call **`connect_server({ api_url })`** to attach additional OpenFGA backends (dynamic tier). **`connect_server({ server })`** for fixed servers with `auth_status: connect_required` is separate — it does not require `allow_dynamic_connections`. Each connect mints or extends a **`connection_scope`** (UUID); subsequent scoped tool calls pass that scope plus `server`.
+When `allow_dynamic_connections: true` in the FGA config, agents can call **`connect_server({ api_url })`** to attach additional OpenFGA backends (dynamic tier). If that backend requires authentication, credentials are collected via the same out-of-band browser flow on connect — see [Runtime authentication](#runtime-authentication).
+
+**`connect_server({ server })`** for fixed servers with `auth_status: connect_required` is separate — it does not require `allow_dynamic_connections`. Each connect mints or extends a **`connection_scope`** (UUID); subsequent scoped tool calls pass that scope plus `server`.
 
 Dynamic servers suit local experimentation, ad-hoc OpenFGA servers, or controlled multi-tenant HTTP deployments. Fixed servers remain available alongside dynamic ones — omit `connection_scope` to target the fixed pool.
 
@@ -41,6 +47,22 @@ Dynamic servers suit local experimentation, ad-hoc OpenFGA servers, or controlle
 | Fixed auth (HTTP) | Fixed server in config, no `auth`, FGA requires auth | `connect_server({ server })` → `connection_scope` + `server` |
 
 Call **`list_servers`** to discover fixed servers (`auth_status: connect_required` when connect is needed; field omitted when fixed direct works), whether dynamic `api_url` connect is enabled (`dynamic_connections_enabled`), and — with `connection_scope` — scoped entries with **`connected`**.
+
+### Runtime authentication
+
+OpenFGA credentials belong in the FGA config **`auth` block** or are collected **out of band** at runtime. They are **never** passed in tool arguments and never exposed to the MCP client (agent) or its models — the operator authenticates in a browser; fga-mcp stores credentials server-side only.
+
+This requires **`--transport http`**. On stdio, put credentials in config or use an open FGA server.
+
+| Scenario | When auth is elicited |
+|----------|------------------------|
+| **Fixed server** — in config, no `auth`, FGA requires auth | On `connect_server({ server })` when `list_servers` shows `auth_status: connect_required` |
+| **Dynamic server** — `connect_server({ api_url })` | On connect, when the target FGA requires auth |
+| **Scoped connection** — credentials expired or rejected | When an FGA tool returns 401; retry that tool after completing auth |
+
+**Agent flow:** the connect or FGA tool returns an auth URL. Open it in a browser, submit credentials, then **retry the same tool call** with identical arguments. Hosted forms are served at `/auth/elicit/:id` on the same origin as `/mcp`.
+
+For MCP response shapes, FastMCP patch notes, and `--public-url`, see [Auth elicitation (HTTP)](#auth-elicitation-http) below and [`specs/openfga-auth-elicitation.md`](specs/openfga-auth-elicitation.md).
 
 ## Quick start
 
@@ -137,6 +159,23 @@ HTTP is useful when the MCP server runs in Docker, on a shared host, or behind y
 
 For production HTTP deployments, prefer **fixed servers with `auth` in config** when possible. Set `allow_dynamic_connections: false` unless agents must register arbitrary `api_url` backends. When using scoped servers (dynamic or fixed `connect_required`), **`connection_scope` is required** on HTTP for all FGA tool calls (stdio may omit it when exactly one scope exists).
 
+### Auth elicitation (HTTP)
+
+Details for operators and integrators. The [runtime auth model](#runtime-authentication) above is the summary agents and config authors need.
+
+When an OpenFGA server requires authentication and credentials are not in the FGA config, fga-mcp serves a **hosted auth form** at `/auth/elicit/:id` on the same origin as `/mcp`. Supported methods: pre-shared key and OIDC client credentials.
+
+**Configuration:**
+
+- `--public-url` / `OPENFGA_MCP_PUBLIC_URL` — browser-reachable origin for elicitation links (defaults to `http://127.0.0.1:<port>`).
+- Credentials are never accepted in `connect_server` tool parameters — only via the hosted form or FGA config `auth` block.
+
+**Client response shape:** MCP clients that declare URL elicitation receive error code `-32042` with the auth URL; others receive a structured tool error that includes the same URL. Both use the same hosted form.
+
+**FastMCP patch:** URL elicitation (`-32042`) requires a local `patch-package` fix to FastMCP 4.3.0 (`patches/fastmcp+4.3.0.patch`) so `UrlElicitationRequiredError` is not wrapped as a generic tool error. Applied on `npm install` via `postinstall`. Remove after upstream fix ([issue #162](https://github.com/punkpeye/fastmcp/issues/162)).
+
+**stdio:** URL elicitation is unavailable. Put credentials in the FGA config `auth` block, use an open FGA server, or run with `--transport http`.
+
 ### From npm or source
 
 ```bash
@@ -174,7 +213,7 @@ The FGA config JSON is the primary way to define OpenFGA servers, defaults, and 
 | `allow_dynamic_connections` | **`false`** | Enable dynamic tier — `connect_server({ api_url })` for arbitrary backends; opt-in only |
 | `defaults.*` | `writeable: false`, `restrict: false` | Global policy and store/model defaults |
 | `servers.*` | — | Fixed OpenFGA servers loaded at startup |
-| `dynamic.*` | See [Dynamic tier](#dynamic-tier) | Scope TTL and caps (ignored when `allow_dynamic_connections` is false; fixed `connect_server({ server })` uses the same scope store when auth elicitation is implemented) |
+| `dynamic.*` | See [Dynamic tier](#dynamic-tier) | Scope TTL and caps (ignored when `allow_dynamic_connections` is false; fixed `connect_server({ server })` uses the same scope store) |
 
 Per-server `default_store` and `default_model` belong on each entry in multi-server setups. Top-level `defaults.default_store` / `default_model` apply to legacy single-server env bootstrap only.
 
@@ -211,7 +250,7 @@ Omit `dynamic` for defaults (`scope_idle_ttl_seconds`: 86400, `max_servers_per_s
 
 **Workflow:**
 
-1. Call `connect_server` with `api_url` (and auth). Response includes `connection_scope` and the **assigned** `server` name.
+1. Call `connect_server({ api_url })`. If FGA requires auth, complete the [out-of-band auth flow](#runtime-authentication) and retry. Response includes `connection_scope` and the **assigned** `server` name.
 2. Pass both on subsequent admin and relationship tool calls.
 3. Call `disconnect_server` when done. Removing the last server in a scope drops the scope.
 
@@ -359,6 +398,12 @@ src/
   server.ts                 # Server bootstrap, transport, lifecycle
   config.ts                 # Environment configuration
   guards.ts                 # Offline/write/restrict checks
+  connect-flow.ts           # connect_server probe + elicitation orchestration
+  auth-probe.ts             # Unauthenticated FGA probe + credential validation
+  openfga-auth-error.ts     # 401 classifier for re-elicit vs refresh
+  fga-call.ts               # Scoped FGA error → reauth elicitation
+  elicitation/              # Session registry, pending store, elicitation request helper
+  auth/                     # Hosted Pre-shared / OIDC auth form routes (HTTP)
   client.ts                 # Server context + OpenFGA client access
   dsl.ts                    # DSL parse/validate via syntax-transformer
   documentation/            # Bundled docs index, search, and chunker

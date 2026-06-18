@@ -3,6 +3,9 @@ import type { ServerContext } from "../../src/client.js";
 import type { FgaDefaultsConfig } from "../../src/fga-config.js";
 import { DynamicScopeStore } from "../../src/dynamic-scope-store.js";
 import { createTestPool } from "../../src/server-pool.js";
+import { PendingElicitationStore } from "../../src/elicitation/pending-store.js";
+
+const DEFAULT_PUBLIC_URL = "http://127.0.0.1:9090";
 
 function envPolicyOverlay(): { globalDefaults?: FgaDefaultsConfig } {
   const globalDefaults: FgaDefaultsConfig = {};
@@ -11,6 +14,14 @@ function envPolicyOverlay(): { globalDefaults?: FgaDefaultsConfig } {
   if (process.env.OPENFGA_MCP_API_STORE) globalDefaults.default_store = process.env.OPENFGA_MCP_API_STORE;
   if (process.env.OPENFGA_MCP_API_MODEL) globalDefaults.default_model = process.env.OPENFGA_MCP_API_MODEL;
   return Object.keys(globalDefaults).length > 0 ? { globalDefaults } : {};
+}
+
+function baseContextFields(overrides: Partial<Pick<ServerContext, "publicUrl" | "connectRequiredServers" | "pendingElicitations">> = {}) {
+  return {
+    publicUrl: overrides.publicUrl ?? DEFAULT_PUBLIC_URL,
+    connectRequiredServers: overrides.connectRequiredServers ?? new Set<string>(),
+    pendingElicitations: overrides.pendingElicitations ?? new PendingElicitationStore(),
+  };
 }
 
 export function createMockContext(client: Partial<OpenFgaClient>, serverName = "default"): ServerContext {
@@ -24,11 +35,19 @@ export function createMockContext(client: Partial<OpenFgaClient>, serverName = "
     transport: "stdio",
     offline: false,
     fgaConfig: { default_server: serverName, servers: { [serverName]: { api_url: "http://127.0.0.1:8080" } } },
+    ...baseContextFields(),
   };
 }
 
 export function createOfflineContext(): ServerContext {
-  return { pool: null, dynamicStore: null, transport: "stdio", offline: true, fgaConfig: null };
+  return {
+    pool: null,
+    dynamicStore: null,
+    transport: "stdio",
+    offline: true,
+    fgaConfig: null,
+    ...baseContextFields(),
+  };
 }
 
 export function createMultiServerContext(
@@ -47,6 +66,7 @@ export function createMultiServerContext(
     transport: "stdio",
     offline: false,
     fgaConfig: { default_server: pool.defaultServer ?? undefined, servers },
+    ...baseContextFields(),
   };
 }
 
@@ -90,5 +110,6 @@ export function createDynamicContext(
         ? Object.fromEntries([...pool.servers.keys()].map((name) => [name, { api_url: `http://127.0.0.1/${name}` }]))
         : {},
     },
+    ...baseContextFields(),
   };
 }

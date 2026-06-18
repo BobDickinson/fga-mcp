@@ -3,6 +3,7 @@ export type ParsedCliArgs = {
   transport?: "stdio" | "http";
   host?: string;
   port?: number;
+  publicUrl?: string;
   sse?: boolean;
   stateless?: boolean;
   debug?: boolean;
@@ -54,6 +55,13 @@ export function parseCliArgs(argv: string[]): ParsedCliArgs {
     if (arg === "--port") {
       const { value, nextIndex } = nextValue(argv, i);
       if (value && /^-?\d+$/.test(value)) parsed.port = parseInt(value, 10);
+      i = nextIndex + 1;
+      continue;
+    }
+
+    if (arg === "--public-url") {
+      const { value, nextIndex } = nextValue(argv, i);
+      if (value) parsed.publicUrl = value;
       i = nextIndex + 1;
       continue;
     }

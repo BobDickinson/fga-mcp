@@ -15,9 +15,11 @@ import {
 export type ResolvedConnection = {
   client: OpenFgaClientType;
   serverRef: string;
+  apiUrl: string;
   policy: ServerPolicy;
   connectionScope?: string;
   dynamic: boolean;
+  scoped: boolean;
 };
 
 export function isDynamicConnectionsEnabled(ctx: ServerContext): boolean {
@@ -27,11 +29,20 @@ export function isDynamicConnectionsEnabled(ctx: ServerContext): boolean {
 /** @deprecated use isDynamicConnectionsEnabled */
 export const isRuntimeConnectEnabled = isDynamicConnectionsEnabled;
 
-export function requireDynamicStore(ctx: ServerContext): DynamicScopeStore {
+export function hasScopeStore(ctx: ServerContext): boolean {
+  return ctx.dynamicStore !== null;
+}
+
+export function requireScopeStore(ctx: ServerContext): DynamicScopeStore {
   if (!ctx.dynamicStore) {
-    throw new Error("Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.");
+    throw new Error("Connection scope store is not available.");
   }
   return ctx.dynamicStore;
+}
+
+/** @deprecated use requireScopeStore when fixed scoped or dynamic scopes are enabled */
+export function requireDynamicStore(ctx: ServerContext): DynamicScopeStore {
+  return requireScopeStore(ctx);
 }
 
 function resolveDynamicConnection(
@@ -39,24 +50,31 @@ function resolveDynamicConnection(
   scopeId: string,
   server?: string,
 ): ResolvedConnection {
-  const store = requireDynamicStore(ctx);
+  const store = requireScopeStore(ctx);
   const serverRef = store.resolveServerRef(scopeId, server);
+  const profile = store.getServerProfile(scopeId, serverRef);
+  const apiUrl = profile?.api_url ?? "";
   return {
     client: store.resolveClient(scopeId, serverRef),
     serverRef,
+    apiUrl,
     policy: store.resolveServerPolicy(scopeId, serverRef),
     connectionScope: scopeId,
-    dynamic: true,
+    dynamic: profile?.fixed_scoped !== true,
+    scoped: true,
   };
 }
 
 function resolveFixedConnection(pool: FixedServerPool, server?: string): ResolvedConnection {
   const serverRef = resolveServerRef(pool, server);
+  const entry = pool.servers.get(serverRef)!;
   return {
     client: resolveFixedClient(pool, { server: serverRef }),
     serverRef,
+    apiUrl: entry.profile.api_url,
     policy: resolveServerPolicy(pool, serverRef),
     dynamic: false,
+    scoped: false,
   };
 }
 
@@ -85,12 +103,20 @@ function findDynamicScopeForServer(ctx: ServerContext, server: string): string |
   return undefined;
 }
 
+function assertNotConnectRequired(ctx: ServerContext, serverRef: string): void {
+  if (ctx.transport === "http" && ctx.connectRequiredServers.has(serverRef)) {
+    throw new Error(
+      `Server "${serverRef}" requires authentication. Call connect_server({ server: "${serverRef}" }) first, then pass connection_scope on FGA tools.`,
+    );
+  }
+}
+
 export function resolveConnection(ctx: ServerContext, args: ResolveClientArgs = {}): ResolvedConnection {
   const store = ctx.dynamicStore;
   const explicitScope = args.connectionScope?.trim();
 
   if (explicitScope) {
-    const scopeId = requireDynamicStore(ctx).requireScopeForDynamicTier(explicitScope);
+    const scopeId = requireScopeStore(ctx).requireScopeForDynamicTier(explicitScope);
     return resolveDynamicConnection(ctx, scopeId, args.server);
   }
 
@@ -103,12 +129,23 @@ export function resolveConnection(ctx: ServerContext, args: ResolveClientArgs = 
 
   const hasFixed = ctx.pool !== null && ctx.pool.servers.size > 0;
 
+  if (hasFixed && args.server?.trim()) {
+    assertNotConnectRequired(ctx, args.server.trim());
+  } else if (hasFixed && !args.server && ctx.pool!.servers.size === 1) {
+    const onlyServer = ctx.pool!.servers.keys().next().value!;
+    assertNotConnectRequired(ctx, onlyServer);
+  }
+
   if (hasFixed) {
     try {
-      return resolveFixedConnection(ctx.pool!, args.server);
+      const resolved = resolveFixedConnection(ctx.pool!, args.server);
+      if (args.server && store && ctx.transport === "http" && findDynamicScopeForServer(ctx, args.server)) {
+        throw new Error("connection_scope is required for scoped servers on HTTP. Call connect_server first.");
+      }
+      return resolved;
     } catch (fixedError) {
       if (args.server && store && ctx.transport === "http" && findDynamicScopeForServer(ctx, args.server)) {
-        throw new Error("connection_scope is required for dynamic servers on HTTP. Call connect_server first.");
+        throw new Error("connection_scope is required for scoped servers on HTTP. Call connect_server first.");
       }
       throw fixedError;
     }

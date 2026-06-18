@@ -1,6 +1,6 @@
 {
   "name": "fga-mcp",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "MCP Server for OpenFGA or Auth0 FGA",
   "type": "module",
   "main": "dist/index.js",
@@ -10,6 +10,8 @@
   "files": [
     "dist",
     "docs",
+    "patches",
+    "scripts",
     "README.md",
     "LICENSE"
   ],
@@ -24,13 +26,19 @@
     "test": "npm run test:unit",
     "test:unit": "vitest run --config vitest.config.ts --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts --coverage",
-    "test:integration:docker": "docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner"
+    "test:integration:docker": "docker compose -f docker-compose.test.yml up --build --abort-on-container-exit --exit-code-from test-runner",
+    "postinstall": "node scripts/apply-patches.mjs"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/BobDickinson/fga-mcp.git"
   },
-  "keywords": ["openfga", "mcp", "authorization", "fga"],
+  "keywords": [
+    "openfga",
+    "mcp",
+    "authorization",
+    "fga"
+  ],
   "author": "Bob Dickinson",
   "license": "MIT",
   "bugs": {
@@ -41,7 +49,8 @@
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openfga/sdk": "^0.9.6",
     "@openfga/syntax-transformer": "^0.2.1",
-    "fastmcp": "^4.3.0",
+    "fastmcp": "4.3.0",
+    "patch-package": "^8.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

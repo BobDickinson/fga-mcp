@@ -5,6 +5,8 @@ import { resolveAdminConnection, type AdminResolveInput } from "./connection-res
 export type AdminTarget = {
   serverRef: string;
   client: OpenFgaClientType;
+  apiUrl: string;
+  scoped: boolean;
   policy: import("./server-pool.js").ServerPolicy;
   store?: string;
   model?: string;
@@ -23,6 +25,8 @@ export function resolveAdminTarget(ctx: ServerContext, input: AdminTargetInput =
     return {
       serverRef: resolved.serverRef,
       client: resolved.client,
+      apiUrl: resolved.apiUrl,
+      scoped: resolved.scoped,
       policy: resolved.policy,
       store: resolved.store,
       model: resolved.model,

@@ -41,6 +41,24 @@ After browser auth: retry the same tool call that returned the elicitation URL.
 
 ---
 
+## Elicitation response paths (Path A / Path B)
+
+**v1 ships both paths.** They are not alternatives at the product level — every elicitation trigger (`connect_server`, 401 reauth) implements capability-based branching via a single helper (`requestUrlElicitation`). A release without either path is incomplete.
+
+| | **Path A** (MCP-native) | **Path B** (structured fallback) |
+|---|---------------------------|----------------------------------|
+| **When** | Client declared `capabilities.elicitation.url` at MCP initialize | Client did **not** declare `elicitation.url` (including legacy `elicitation: {}` form-only) |
+| **Wire format** | JSON-RPC error on failed `tools/call`: code **`-32042`**, `data.elicitations[]` | Normal `CallToolResult`: `isError: true`, `structuredContent` with `url` + metadata |
+| **How fga-mcp emits** | `throw new UrlElicitationRequiredError([{ mode: "url", elicitationId, url, message }])` | `throw new UserError(message, { elicitation_required, elicitation_id, url, reason, message })` |
+| **Who opens the URL** | MCP client (spec: consent, secure browser surface) | Agent/host parses `structuredContent.url` and surfaces to user |
+| **FastMCP dependency** | Requires [local patch](#fastmcp-gap-and-dependency-strategy) — unpatched FastMCP swallows `-32042` | Works on stock FastMCP — but **not shipped alone** |
+
+Capability is read from `session.clientCapabilities` after initialize — **never guessed**. Same hosted auth UI and pending-store flow for both paths; only the tool response shape differs.
+
+See [Error surface (v1)](#error-surface-v1) for exact JSON payloads.
+
+---
+
 ## Problem and goals
 
 ### Today
@@ -328,21 +346,54 @@ Exactly one of **`api_url`** or **`server`**:
 
 ### Error surface (v1)
 
-**Primary:** `URLElicitationRequiredError` (code **`-32042`**) with data:
+Wire formats for [Path A and Path B](#elicitation-response-paths). Branch in `requestUrlElicitation()` — one code path, two response shapes.
+
+#### Path A — `-32042` (`URLElicitationRequiredError`)
+
+When `capabilities.elicitation.url` was declared at init:
 
 ```json
 {
-  "elicitation_required": true,
-  "elicitation_id": "<uuid>",
-  "url": "https://<origin>/auth/elicit/<uuid>",
-  "reason": "connect",
-  "message": "Authenticate to connect to OpenFGA"
+  "jsonrpc": "2.0",
+  "id": 2,
+  "error": {
+    "code": -32042,
+    "message": "Authenticate to connect to OpenFGA",
+    "data": {
+      "elicitations": [
+        {
+          "mode": "url",
+          "elicitationId": "<uuid>",
+          "url": "https://<origin>/auth/elicit/<uuid>",
+          "message": "Authenticate to connect to OpenFGA"
+        }
+      ]
+    }
+  }
 }
 ```
 
-**Fallback** when client does not surface `-32042`: same fields in tool error text / JSON body so agents can parse `url`.
+Throw `@modelcontextprotocol/sdk` `UrlElicitationRequiredError` from tool handlers; the MCP protocol layer serializes this shape. fga-specific fields (`reason: connect | reauth`) are **not** in the MCP error payload — they are implied by which tool the agent retries.
 
-Do not fall back to form-mode elicitation for secrets.
+#### Path B — `UserError` structured fallback
+
+When `elicitation.url` was **not** declared at init:
+
+```json
+{
+  "content": [{ "type": "text", "text": "Authenticate to connect to OpenFGA. Open the URL below, complete the form, then retry this tool with the same arguments." }],
+  "isError": true,
+  "structuredContent": {
+    "elicitation_required": true,
+    "elicitation_id": "<uuid>",
+    "url": "https://<origin>/auth/elicit/<uuid>",
+    "reason": "connect",
+    "message": "Authenticate to connect to OpenFGA"
+  }
+}
+```
+
+**Never** use form-mode elicitation for secrets (MCP forbids API keys in form mode). **Never** send `elicitation/create` with `mode: "url"` when the client did not declare `elicitation.url`.
 
 ### Use cases
 
@@ -559,40 +610,286 @@ Do **not** use URL elicitation to authenticate users **to fga-mcp**.
 
 ---
 
+## MCP URL elicitation integration
+
+Research basis: MCP spec **2025-11-25** ([elicitation](https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation)), `@modelcontextprotocol/sdk` **v1.29.0** (installed), `fastmcp` **v4.3.0** (installed).
+
+### What MCP provides
+
+| Mechanism | When used | fga-mcp |
+|-----------|-----------|---------|
+| **`URLElicitationRequiredError` (`-32042`)** on failed `tools/call` | Tool cannot proceed until user completes OOB URL flow | **Primary** — `connect_server`, FGA tools on 401 reauth |
+| **`elicitation/create` with `mode: "url"`** | Server-initiated, can block until user accepts | **Not used** — reactive error + agent retry is simpler and matches our connect/reauth model |
+| **`notifications/elicitation/complete`** | Optional signal after OOB form POST | **Send on POST success** when client declared `elicitation.url`; flow does not depend on it |
+
+Client capability at initialize (authoritative — do not guess):
+
+```json
+{
+  "capabilities": {
+    "elicitation": {
+      "url": {}
+    }
+  }
+}
+```
+
+Per spec: servers **MUST NOT** send URL elicitation to clients that did not declare `elicitation.url`. Empty `elicitation: {}` means form-only (legacy); treat as **no URL support**.
+
+### SDK surface (concrete)
+
+| API | Package path | Use in fga-mcp |
+|-----|--------------|----------------|
+| `UrlElicitationRequiredError` | `@modelcontextprotocol/sdk/types.js` | Throw from tools when Path A applies |
+| `Server.getClientCapabilities()` | underlying MCP `Server` on each FastMCP session | Read `elicitation?.url` after init |
+| `Server.createElicitationCompletionNotifier(elicitationId)` | same | Call after hosted form POST marks pending complete |
+| `Server.elicitInput({ mode: 'url', ... })` | same | **Do not use** — proactive `elicitation/create` path |
+
+Official reference implementation: `@modelcontextprotocol/sdk` examples `elicitationUrlExample` (server throws `UrlElicitationRequiredError`; POST handler calls completion notifier).
+
+### FastMCP gap and dependency strategy
+
+FastMCP **v4.3.0** (latest on npm) has no elicitation support. Open upstream tracking: [punkpeye/fastmcp#162](https://github.com/punkpeye/fastmcp/issues/162) (general elicitation; no issue yet for `-32042` passthrough specifically).
+
+**The bug:** FastMCP's `CallTool` handler catches **all** thrown errors and converts them to `{ isError: true, content: [...] }` — including `UrlElicitationRequiredError`. The client never sees JSON-RPC **`-32042`** with `data.elicitations[]`.
+
+The high-level SDK `McpServer` re-throws `UrlElicitationRequired` correctly (`server/mcp.js`); FastMCP uses low-level `Server.setRequestHandler(CallToolRequestSchema, ...)` in `src/FastMCP.ts` (~line 2203) and swallows it.
+
+**The fix (4 lines)** — re-throw before the existing `UserError` branch:
+
+```typescript
+} catch (error) {
+  if (error instanceof McpError && error.code === ErrorCode.UrlElicitationRequired) {
+    throw error; // MCP protocol layer serializes as -32042
+  }
+  if (error instanceof UserError) {
+    // existing Path B fallback — unchanged
+```
+
+**Local patch note:** committed patch uses duck-type `error.code === ErrorCode.UrlElicitationRequired` instead of `instanceof McpError` because duplicate SDK copies in the bundle can break `instanceof`. Upstream PR should prefer `instanceof` if FastMCP’s dependency graph guarantees a single SDK instance.
+
+FastMCP already imports `McpError` and `ErrorCode` from `@modelcontextprotocol/sdk/types.js`. No new dependencies.
+
+Without the local patch, Path A cannot reach the client (FastMCP converts `-32042` into a generic `isError` tool result). **Both paths are still required in v1** — the patch is step zero, not an optional extra for Path A only.
+
+#### Why not a git-branch dependency?
+
+The GitHub repo contains **`src/` only** — no committed `dist/`, and no `"prepare"` script to build on install. npm packages from the registry ship pre-built `dist/` (`"files": ["dist"]`). Pointing `package.json` at a fork branch would install source with `"main": "dist/FastMCP.js"` pointing at a file that does not exist until someone runs `tsup`.
+
+A fork could work only with an added `"prepare": "npm run build"` hook (and devDeps installed on every `npm install`). That is heavier than a local patch for interim dev/demo.
+
+#### Interim approach: local patch → verify → upstream PR
+
+Use a **committed local patch** in fga-mcp while building and testing elicitation. After the full flow is verified end-to-end, open a PR to `punkpeye/fastmcp` with the **`src/FastMCP.ts`** change (not the generated `dist/chunk-*.js`). Remove the local patch when a fixed version ships on npm.
+
+| Phase | Action |
+|-------|--------|
+| **1. Patch locally** | Apply passthrough in installed `node_modules/fastmcp/dist/chunk-QWUBNXAF.js` (v4.3.0 bundle); generate patch file — **required before elicitation work** |
+| **2. Commit patch** | `patches/fastmcp+4.3.0.patch` + `patch-package` in `postinstall` |
+| **3. Verify patch** | Test Path A: `UrlElicitationRequiredError` → JSON-RPC `-32042` on the wire. Test Path B on **unmodified** catch path: `UserError` → `structuredContent.url` |
+| **4. Build fga-mcp elicitation** | Hosted auth, pending store, `requestUrlElicitation()` with [Path A / Path B branching](#elicitation-response-paths) |
+| **5. Demo / E2E** | Both paths: capable client (`-32042`) and fallback client (`UserError`); full connect → POST → retry |
+| **6. Upstream PR** | PR to `punkpeye/fastmcp`: fix `src/FastMCP.ts`, add vitest covering re-throw; reference #162 |
+| **7. Drop patch** | When `fastmcp@X.Y.Z` with fix is on npm, remove `patches/` entry and bump dependency |
+
+**Patch maintenance:** the patch targets generated `dist/chunk-*.js`; the chunk hash may change on FastMCP upgrades — re-apply or drop patch when bumping `fastmcp`. Document pinned version in README until upstream release.
+
+**Upstream PR contents (after our verification):** the proven `src/FastMCP.ts` diff, a test that `CallTool` propagates `UrlElicitationRequiredError` as JSON-RPC `-32042`, and a note that `@modelcontextprotocol/sdk`'s `McpServer` already does this — FastMCP should match.
+
+FastMCP **does** expose what we need on each session (no FastMCP API changes required beyond the re-throw):
+
+- `FastMCPSession.server` — underlying MCP SDK `Server`; **`oninitialized`** callback fires after the client sends `notifications/initialized` (correct init-phase hook)
+- `FastMCPSession.server.getClientCapabilities()` — client caps after init (preferred source; do **not** rely on `FastMCPSession.clientCapabilities`, which is copied later in FastMCP’s transport `ready` path)
+- `FastMCPSession.sessionId` — key for pending elicitation binding
+- `FastMCP` `connect` / `disconnect` events — attach init hooks and tear down registry entries
+
+Tool `execute` context already includes `sessionId` (HTTP). It does **not** include the MCP `Server` reference; use a session registry populated during MCP init (see below).
+
+### fga-mcp elicitation module
+
+New package area: **`src/elicitation/`**
+
+#### `session-registry.ts`
+
+In-memory `Map<sessionId, { supportsUrlElicitation, mcpServer }>`. Register/unregister/get/clear only — no live-session refresh or polling.
+
+#### `register-elicitation.ts`
+
+On `FastMCP` `connect`, hook the underlying MCP SDK server (not FastMCP transport `ready`):
+
+```typescript
+server.on("connect", ({ session }) => {
+  session.server.oninitialized = () => {
+    registerElicitationSession(session.sessionId!, {
+      clientCapabilities: session.server.getClientCapabilities() ?? null,
+      mcpServer: session.server,
+    });
+  };
+  // HTTP reconnect: client skips initialize when session id already exists
+  if (session.server.getClientCapabilities()) registerFromInitialized(session);
+});
+server.on("disconnect", ({ session }) => unregisterElicitationSession(session.sessionId));
+```
+
+**Why not `connect` + `session.clientCapabilities`?** FastMCP emits `connect` before MCP init completes and copies caps into `session.clientCapabilities` only after its async transport `ready` path — too late for the first tool call after `client.connect()`. MCP init is synchronous request/response; `oninitialized` is the correct phase.
+
+On `disconnect`: remove entry. Registry is in-memory per MCP session.
+
+#### `request-url-elicitation.ts`
+
+Single entry point called from `connect_server` and FGA tool 401 handler:
+
+```typescript
+function requestUrlElicitation(opts: {
+  sessionId: string | undefined;
+  transport: "http" | "stdio";
+  elicitationId: string;
+  url: string;
+  message: string;
+  reason: "connect" | "reauth";
+}): never
+```
+
+Logic:
+
+1. **stdio** → throw plain error ([stdio transport policy](#stdio-transport-policy-v1)); no URL emission.
+2. Create/update `PendingElicitation` in store (CSRF, TTL, bind `sessionId`).
+3. Look up session registry by `sessionId`.
+4. If `supportsUrlElicitation` → `throw new UrlElicitationRequiredError([{ mode: "url", elicitationId, url, message }])`.
+5. Else → `throw new UserError(message, { elicitation_required: true, elicitation_id, url, reason, message })` (Path B).
+
+#### POST completion (implemented in `src/auth/routes.ts` + `notifyElicitationComplete`)
+
+Plan named `complete-elicitation.ts`; **shipped without that file**. On successful `POST /auth/elicit/:id`:
+
+1. `routes.ts` — validate CSRF, store creds in scope store, mark pending `completed`, render success HTML.
+2. `notifyElicitationComplete()` in `request-url-elicitation.ts` — if session registry entry exists and `supportsUrlElicitation`:
+   ```typescript
+   session.mcpServer.createElicitationCompletionNotifier(elicitationId)().catch(() => {});
+   ```
+
+Completion notification is **optional UX** — agent retry remains the required completion path.
+
+`registerElicitationSupport(server)` is called from `registerMcpCapabilities()` in `server.ts` (before `start()`).
+
+### End-to-end flow (HTTP, capable client)
+
+```text
+1. Client initialize → capabilities.elicitation.url present
+2. Client sends notifications/initialized → session.server.oninitialized → registry records supportsUrlElicitation: true
+
+3. Agent: connect_server({ server: "prod" })
+4. fga-mcp: probe → 401 → create PendingElicitation → requestUrlElicitation()
+5. Tool throws UrlElicitationRequiredError → (patched) FastMCP re-throws → client gets -32042
+6. Client opens URL with user consent
+
+7. User POSTs credentials to /auth/elicit/{id}
+8. fga-mcp: validate, store in DynamicScopeStore, optional elicitation/complete notification
+
+9. Agent retries connect_server({ server: "prod" }) → matches completed pending → connected
+```
+
+Same sequence for **reauth** on FGA 401, except step 3 is the failing FGA tool and step 9 retries that tool.
+
+### End-to-end flow (HTTP, no URL capability)
+
+Steps 3–5: `UserError` → `CallToolResult` with `structuredContent.url`. Agent/host must surface URL to the user manually. Steps 7–9 unchanged.
+
+---
+
 ## MCP client support
 
-URL elicitation in MCP **2025-11-25**. When unsupported, include `url` and human message in error JSON. Document tested clients in README when implemented.
+| Client capability at init | fga-mcp behavior |
+|---------------------------|------------------|
+| `elicitation.url` declared | Path A: `-32042` with `data.elicitations[]` |
+| No `elicitation.url` (including `{}` form-only) | Path B: `UserError` structured fallback with `url` |
+| stdio transport | No elicitation — config `auth`, open FGA, or actionable error |
+
+Document tested clients in README after implementation (SDK example client, Cursor, etc.).
 
 ---
 
 ## Implementation plan
 
-### Release E1 — Foundation
+Single release — auth elicitation is one vertical feature; do not land probe/routes and MCP wiring in separate phases.
 
-- [ ] Pending elicitation store (TTL, one-time use, CSRF)
-- [ ] OpenFGA auth probe helper (+ probe error / retry policy)
-- [ ] Runtime `public_url` + elicitation URL builder
-- [ ] HTTP auth routes (`src/auth/routes.ts`, `src/auth/templates.ts`) — HTTP only
-- [ ] Stdio guard + elicitation unavailable errors
-- [x] FGA config parser: nested `auth`; reject top-level credential fields
+### Implementation status (2026-06-18)
+
+**Shipped.** Remaining: upstream FastMCP PR, drop local patch after npm release, rate limiting on `/auth/*`, 401 reauth integration E2E (wired in code; not yet a dedicated docker test).
+
+**Deviations from plan:**
+
+| Area | Plan | As built |
+|------|------|----------|
+| Session registry timing | Register on FastMCP `connect` using `session.clientCapabilities` | Register on MCP SDK `session.server.oninitialized` (+ reconnect fallback reading `getClientCapabilities()`); see [register-elicitation.ts](../src/elicitation/register-elicitation.ts) |
+| Completion helper | Separate `complete-elicitation.ts` | `auth/routes.ts` POST handler + `notifyElicitationComplete()` in `request-url-elicitation.ts` |
+| FastMCP patch check | `instanceof McpError && error.code === UrlElicitationRequired` | `error.code === ErrorCode.UrlElicitationRequired` (duck-type; avoids duplicate `@modelcontextprotocol/sdk` copies breaking `instanceof`) |
+| Path A/B verification | Standalone patch verification tests | Real MCP client E2E in `tests/integration/mcp/elicitation-e2e.test.ts` (same docker compose as other integration tests) plus handler smoke in `tests/integration/auth/connect-elicitation.test.ts` |
+| CSRF | Unit test called out | Exercised in integration E2E via `completeAuthForm()`; no dedicated CSRF unit test |
+
+### 1. FastMCP local patch (step zero — enables Path A; both paths ship in v1)
+
+Prerequisite for [Path A](#elicitation-response-paths). [Path B](#elicitation-response-paths) uses stock FastMCP but is implemented and tested alongside Path A — not as a standalone release.
+
+See [FastMCP gap and dependency strategy](#fastmcp-gap-and-dependency-strategy).
+
+- [x] Apply passthrough in `node_modules/fastmcp/dist/chunk-QWUBNXAF.js` (v4.3.0) — duck-type `error.code === UrlElicitationRequired` (see deviations table)
+- [x] Add `patch-package` devDep; `"postinstall": "patch-package"`; commit `patches/fastmcp+4.3.0.patch`
+- [x] Verify **Path A:** MCP E2E — JSON-RPC `code: -32042`, `data.elicitations[]` (`tests/integration/mcp/elicitation-e2e.test.ts`)
+- [x] Verify **Path B:** MCP E2E — `CallToolResult.isError` + `structuredContent.url` (no `-32042`)
+- [x] Document in README: patched fastmcp until upstream release; both elicitation paths documented
+- [ ] *(After both paths verified E2E)* Open PR to `punkpeye/fastmcp` with `src/FastMCP.ts` fix + test; comment on #162
+- [ ] *(After upstream release)* Remove patch; bump `fastmcp` to fixed semver
+
+### 2. Elicitation module (`src/elicitation/`)
+
+- [x] `session-registry.ts` — in-memory map keyed by `sessionId`
+- [x] `pending-store.ts` — `PendingElicitation` TTL, one-time use, CSRF, completion matching
+- [x] `request-url-elicitation.ts` — capability branch (Path A vs B); includes `notifyElicitationComplete()`
+- [x] POST completion — `auth/routes.ts` + `notifyElicitationComplete()` *(no separate `complete-elicitation.ts`)*
+- [x] `register-elicitation.ts` — `oninitialized` hook + `connect`/`disconnect` *(not register-on-connect)*
+- [x] `public-url.ts` — `OPENFGA_MCP_PUBLIC_URL` / `--public-url` URL builder
+
+### 3. HTTP auth UI (`src/auth/`)
+
+- [x] `routes.ts` — `GET/POST /auth/elicit/:elicitationId` via `server.addRoute(..., { public: true })`
+- [x] `templates.ts` — server-rendered Pre-shared / OIDC form; bind `sessionId` in pending record
+- [x] Register routes only when `transport === "http"`
+- [ ] Rate limit `/auth/*` (recommended)
+
+### 4. Probe and discovery
+
+- [x] `auth-probe.ts` — unauthenticated `ListStores`; 200 / 401 / error policy per [Detecting auth requirement](#detecting-auth-requirement-probe)
+- [x] Startup probe → `auth_status: connect_required` on fixed servers in `list_servers` (`client.ts` → `connectRequiredServers`)
+- [x] Create `DynamicScopeStore` when dynamic **or** any fixed server may need scoped connect
+
+### 5. Connect and routing
+
+- [x] `connect_server({ server })` for fixed scoped — independent of `allow_dynamic_connections`
+- [x] `connect_server` without cred params → probe → elicit or connect
+- [x] Remove `api_token`, OIDC fields from connect tool schema
+- [x] Scope store `fixed: true` for config-seeded scoped entries (`fixed_scoped` / `fixedFromConfig`)
+- [x] Resolver: scoped vs fixed direct; connect-required errors
+- [x] FGA config nested `auth`; reject flat cred fields
 - [x] `buildCredentials()` from `ServerAuth`
-- [ ] Create `DynamicScopeStore` when dynamic **or** fixed may need scoped connect
-- [ ] Startup probe + `auth_status: connect_required` on `list_servers`
-- [ ] `connect_server({ server })` for fixed scoped (independent of `allow_dynamic_connections`)
-- [ ] Scope store `fixed: true` for config-seeded entries
-- [ ] Resolver: scoped vs fixed direct; connect-required errors
-- [ ] `connect_server` without cred params → probe → elicit or connect
-- [x] Rename `allow_dynamic_connections`; deprecated `allow_runtime_connect`; `dynamic_connections_enabled` in list
-- [ ] Remove credential params from connect tool schema
-- [ ] Unit tests: probe, auth_status, fixed scoped, dynamic, stdio errors, completion matching
+- [x] `allow_dynamic_connections` rename + `dynamic_connections_enabled` in list
 
-### Release E2 — MCP integration and runtime 401
+### 6. Runtime 401
 
-- [ ] Error classifier (`401` → refresh vs re-elicit)
-- [ ] Config refresh + scoped re-elicit in tool handlers
-- [ ] Emit `-32042` / URL elicitation from FastMCP
-- [ ] Optional `notifications/elicitation/complete`
-- [ ] README + integration test (auth-enabled OpenFGA)
+- [x] `classifyOpenFgaAuthError()` → `refresh_config` | `re_elicit` | `other`
+- [x] Fixed direct: SDK refresh from config; no elicitation
+- [x] Scoped: invalidate client → `requestUrlElicitation({ reason: "reauth" })` → agent retries same FGA tool *(unit-tested classifier; no docker reauth E2E yet)*
+
+### 7. Transport guards
+
+- [x] Stdio: elicitation unavailable errors per [stdio transport policy](#stdio-transport-policy-v1)
+- [x] HTTP: call `registerElicitationSupport(server)` in `registerMcpCapabilities()` (`server.ts`)
+
+### 8. Tests and docs
+
+- [x] Unit: probe outcomes, Path A and Path B branching, completion matching, stdio errors, auth classifier (`tests/unit/elicitation.test.ts`, `tests/unit/openfga-auth-error.test.ts`)
+- [x] Integration: auth-enabled OpenFGA — **Path A E2E** and **Path B E2E** (real MCP client); connect → POST → retry; handler smoke tests
+- [x] README: capability matrix, `public_url`, agent retry instructions, FastMCP patch note
 
 ---
 
@@ -603,6 +900,9 @@ URL elicitation in MCP **2025-11-25**. When unsupported, include `url` and human
 - **Client `auth_status`** — only `connect_required` when needed; scoped list uses `connected`.
 - **stdio + auth UI** — HTTP required for elicitation v1.
 - **Completion** — error + agent retry; connect retries `connect_server`, reauth retries failing FGA tool.
+- **Elicitation paths (both required v1)** — [Path A](#elicitation-response-paths) (`-32042`) when client declared `elicitation.url`; [Path B](#elicitation-response-paths) (`UserError` + `structuredContent`) otherwise; single `requestUrlElicitation()` helper; never form-mode for secrets.
+- **FastMCP local patch (interim)** — required for Path A; commit `patch-package` fix; upstream PR after both paths verified E2E; drop patch on npm release.
+- **Session registry init hook** — MCP SDK `oninitialized` on `session.server`, not FastMCP transport `connect`/`ready` (see implementation status).
 - **No PKCE, no layer-2 FGA access control, no sidecar auth host.**
 
 ---
@@ -610,6 +910,7 @@ URL elicitation in MCP **2025-11-25**. When unsupported, include `url` and human
 ## References
 
 - MCP elicitation: https://modelcontextprotocol.io/specification/2025-11-25/client/elicitation
+- FastMCP elicitation (open): https://github.com/punkpeye/fastmcp/issues/162
 - SEP-1036 URL mode: https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1036
 - OpenFGA configure auth: https://openfga.dev/docs/getting-started/setup-openfga/configure-openfga
 - Code: `src/dynamic-scope-store.ts`, `src/tools/openfga.ts`, `src/fga-config.ts`

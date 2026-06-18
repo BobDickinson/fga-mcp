@@ -1,11 +1,9 @@
-import { resolveAdminTarget, resolveTupleTarget } from "../../admin-context.js";
+import { resolveTupleTarget } from "../../admin-context.js";
 import { checkOfflineMode, checkRestrictedMode, checkWritePermission } from "../../guards.js";
 import type { ServerContext } from "../../client.js";
 import { parseEntityString } from "../../dsl.js";
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
+import type { ToolCallContext } from "../../elicitation/types.js";
+import { formatFgaApiError } from "./fga-api-error.js";
 
 export async function checkPermission(
   ctx: ServerContext,
@@ -16,6 +14,7 @@ export async function checkPermission(
   object: string,
   server?: string,
   connectionScope?: string,
+  toolCtx?: ToolCallContext,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Checking permissions");
   if (offline) return offline;
@@ -33,7 +32,7 @@ export async function checkPermission(
     );
     return response.allowed ? "✅ Permission allowed" : "❌ Permission denied";
   } catch (e) {
-    return `❌ Failed to check permission! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to check permission!");
   }
 }
 
@@ -46,6 +45,7 @@ export async function grantPermission(
   object: string,
   server?: string,
   connectionScope?: string,
+  toolCtx?: ToolCallContext,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Granting permissions");
   if (offline) return offline;
@@ -66,7 +66,7 @@ export async function grantPermission(
     });
     return "✅ Permission granted successfully";
   } catch (e) {
-    return `❌ Failed to grant permission! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to grant permission!");
   }
 }
 
@@ -79,6 +79,7 @@ export async function revokePermission(
   object: string,
   server?: string,
   connectionScope?: string,
+  toolCtx?: ToolCallContext,
 ): Promise<string> {
   const offline = checkOfflineMode(ctx, "Revoking permissions");
   if (offline) return offline;
@@ -99,7 +100,7 @@ export async function revokePermission(
     });
     return "✅ Permission revoked successfully";
   } catch (e) {
-    return `❌ Failed to revoke permission! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to revoke permission!");
   }
 }
 
@@ -112,6 +113,7 @@ export async function listObjects(
   relation: string,
   server?: string,
   connectionScope?: string,
+  toolCtx?: ToolCallContext,
 ): Promise<string | string[]> {
   const offline = checkOfflineMode(ctx, "Listing objects");
   if (offline) return offline;
@@ -129,7 +131,7 @@ export async function listObjects(
     );
     return response.objects ?? [];
   } catch (e) {
-    return `❌ Failed to list objects! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to list objects!");
   }
 }
 
@@ -141,6 +143,7 @@ export async function listUsers(
   relation: string,
   server?: string,
   connectionScope?: string,
+  toolCtx?: ToolCallContext,
 ): Promise<string | string[]> {
   const offline = checkOfflineMode(ctx, "Listing users");
   if (offline) return offline;
@@ -164,6 +167,6 @@ export async function listUsers(
       })
       .filter(Boolean);
   } catch (e) {
-    return `❌ Failed to list users! Error: ${errorMessage(e)}`;
+    return formatFgaApiError(ctx, resolved, e, toolCtx, "Failed to list users!");
   }
 }

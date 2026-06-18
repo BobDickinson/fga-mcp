@@ -4,6 +4,7 @@ export type RuntimeConfig = {
   transport: "stdio" | "http";
   host: string;
   port: number;
+  publicUrl?: string;
   sse: boolean;
   stateless: boolean;
   debug: boolean;
@@ -48,6 +49,11 @@ function resolveConfigPath(cli: ParsedCliArgs): string | undefined {
   return undefined;
 }
 
+function envPublicUrl(): string | undefined {
+  const value = envString("OPENFGA_MCP_PUBLIC_URL", "");
+  return value !== "" ? value : undefined;
+}
+
 export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): RuntimeConfig {
   const cli = parseCliArgs(argv);
 
@@ -55,6 +61,7 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
     transport: envString("OPENFGA_MCP_TRANSPORT", DEFAULTS.transport) === "http" ? "http" : "stdio",
     host: envString("OPENFGA_MCP_TRANSPORT_HOST", DEFAULTS.host),
     port: envInt("OPENFGA_MCP_TRANSPORT_PORT", DEFAULTS.port),
+    publicUrl: envPublicUrl(),
     sse: envBool("OPENFGA_MCP_TRANSPORT_SSE", DEFAULTS.sse),
     stateless: envBool("OPENFGA_MCP_TRANSPORT_STATELESS", DEFAULTS.stateless),
     debug: envBool("OPENFGA_MCP_DEBUG", DEFAULTS.debug),
@@ -64,6 +71,7 @@ export function loadRuntimeConfig(argv: string[] = process.argv.slice(2)): Runti
   if (cli.transport) config.transport = cli.transport;
   if (cli.host) config.host = cli.host;
   if (cli.port !== undefined) config.port = cli.port;
+  if (cli.publicUrl) config.publicUrl = cli.publicUrl;
   if (cli.sse !== undefined) config.sse = cli.sse;
   if (cli.stateless !== undefined) config.stateless = cli.stateless;
   if (cli.debug !== undefined) config.debug = cli.debug;

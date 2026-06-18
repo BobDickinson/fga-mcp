@@ -202,16 +202,17 @@ export type ListedServer = {
   api_url: string;
   default: boolean;
   fixed: true;
+  auth_status?: "connect_required";
   default_store?: string;
   default_model?: string;
   restrict: boolean;
   writeable: boolean;
 };
 
-export function listFixedServers(pool: FixedServerPool): ListedServer[] {
+export function listFixedServers(pool: FixedServerPool, connectRequired?: Set<string>): ListedServer[] {
   return [...pool.servers.entries()].map(([name, entry]) => {
     const policy = resolveServerPolicy(pool, name);
-    return {
+    const listed: ListedServer = {
       name,
       api_url: entry.profile.api_url,
       default: pool.defaultServer === name,
@@ -221,6 +222,10 @@ export function listFixedServers(pool: FixedServerPool): ListedServer[] {
       restrict: policy.restrict,
       writeable: policy.writeable,
     };
+    if (connectRequired?.has(name)) {
+      listed.auth_status = "connect_required";
+    }
+    return listed;
   });
 }
 

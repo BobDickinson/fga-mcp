@@ -11,6 +11,9 @@ import { loadFgaConfig, type FgaConfigDocument } from "./fga-config.js";
 import { getConfiguredString } from "./config.js";
 import type { RuntimeConfig } from "./runtime-config.js";
 import { resolveConnection } from "./connection-resolver.js";
+import { probeOpenFgaAuth } from "./auth-probe.js";
+import { PendingElicitationStore } from "./elicitation/pending-store.js";
+import { buildPublicUrl } from "./elicitation/public-url.js";
 
 export type ServerContext = {
   pool: FixedServerPool | null;
@@ -18,11 +21,18 @@ export type ServerContext = {
   transport: "stdio" | "http";
   offline: boolean;
   fgaConfig: FgaConfigDocument | null;
+  publicUrl: string;
+  connectRequiredServers: Set<string>;
+  pendingElicitations: PendingElicitationStore;
 };
 
 export async function createServerContext(
   configPath?: string,
-  runtime: Pick<RuntimeConfig, "transport"> = { transport: "stdio" },
+  runtime: Pick<RuntimeConfig, "transport" | "host" | "port" | "publicUrl"> = {
+    transport: "stdio",
+    host: "127.0.0.1",
+    port: 9090,
+  },
 ): Promise<ServerContext> {
   const loaded = loadFgaConfig(configPath);
 
@@ -33,6 +43,13 @@ export async function createServerContext(
   const { config } = loaded;
   const hasFixedServers = Object.keys(config.servers ?? {}).length > 0;
   const allowDynamicConnections = config.allow_dynamic_connections ?? false;
+  const publicUrl = buildPublicUrl({
+    publicUrl: runtime.publicUrl,
+    bindHost: runtime.host,
+    port: runtime.port,
+  });
+  const pendingElicitations = new PendingElicitationStore();
+  const connectRequiredServers = new Set<string>();
 
   if (!hasFixedServers && !allowDynamicConnections) {
     logInfo("Starting OpenFGA MCP Server in OFFLINE MODE");
@@ -44,17 +61,44 @@ export async function createServerContext(
       transport: runtime.transport,
       offline: true,
       fgaConfig: config,
+      publicUrl,
+      connectRequiredServers,
+      pendingElicitations,
     };
   }
 
   const pool = hasFixedServers ? await createFixedServerPool(config) : null;
-  const dynamicStore = allowDynamicConnections
-    ? new DynamicScopeStore({
-        transport: runtime.transport,
-        globalDefaults: config.defaults ?? {},
-        config: resolveDynamicConfig(config.dynamic),
-      })
-    : null;
+
+  if (pool && runtime.transport === "http") {
+    for (const [name, entry] of pool.servers.entries()) {
+      if (entry.profile.auth) continue;
+      const probe = await probeOpenFgaAuth(entry.profile.api_url);
+      if (probe.status === "auth_required") {
+        connectRequiredServers.add(name);
+      } else if (probe.status === "error") {
+        logWarning(`Auth probe for fixed server "${name}": ${probe.message}`);
+      }
+    }
+  } else if (pool && runtime.transport === "stdio") {
+    for (const [name, entry] of pool.servers.entries()) {
+      if (!entry.profile.auth) {
+        const probe = await probeOpenFgaAuth(entry.profile.api_url);
+        if (probe.status === "auth_required") {
+          connectRequiredServers.add(name);
+        }
+      }
+    }
+  }
+
+  const needsScopedConnect = connectRequiredServers.size > 0;
+  const dynamicStore =
+    allowDynamicConnections || needsScopedConnect
+      ? new DynamicScopeStore({
+          transport: runtime.transport,
+          globalDefaults: config.defaults ?? {},
+          config: resolveDynamicConfig(config.dynamic),
+        })
+      : null;
 
   logInfo("Starting OpenFGA MCP Server in ONLINE MODE");
   if (pool) {
@@ -70,7 +114,7 @@ export async function createServerContext(
   }
   logInfo("All features enabled: Planning, Coding, and Administrative\n");
 
-  return { pool, dynamicStore, transport: runtime.transport, offline: false, fgaConfig: config };
+  return { pool, dynamicStore, transport: runtime.transport, offline: false, fgaConfig: config, publicUrl, connectRequiredServers, pendingElicitations };
 }
 
 export function requirePool(ctx: ServerContext): FixedServerPool {
@@ -119,6 +163,10 @@ export function disposeServerContext(ctx: ServerContext): void {
 
 function logInfo(message: string): void {
   process.stderr.write(`[INFO] ${message}\n`);
+}
+
+function logWarning(message: string): void {
+  process.stderr.write(`[WARNING] ${message}\n`);
 }
 
 export function legacyEnvHasCredentials(): boolean {

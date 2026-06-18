@@ -1,0 +1,14 @@
+diff --git a/node_modules/fastmcp/dist/chunk-QWUBNXAF.js b/node_modules/fastmcp/dist/chunk-QWUBNXAF.js
+index 2b9c350..4cfe91a 100644
+--- a/node_modules/fastmcp/dist/chunk-QWUBNXAF.js
++++ b/node_modules/fastmcp/dist/chunk-QWUBNXAF.js
+@@ -1194,6 +1194,9 @@ ${error instanceof Error ? error.stack : JSON.stringify(error)}`
+           result = ContentResultZodSchema.parse(maybeStringResult);
+         }
+       } catch (error) {
++        if (typeof error === "object" && error !== null && "code" in error && error.code === ErrorCode.UrlElicitationRequired) {
++          throw error;
++        }
+         if (error instanceof UserError) {
+           return {
+             content: [{ text: error.message, type: "text" }],

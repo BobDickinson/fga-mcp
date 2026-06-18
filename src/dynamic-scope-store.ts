@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OpenFgaClient as OpenFgaClientType } from "@openfga/sdk";
-import { buildServerAuth, type FgaDefaultsConfig, type FgaDynamicConfig, type FgaServerConfig } from "./fga-config.js";
+import type { FgaDefaultsConfig, FgaDynamicConfig, FgaServerConfig } from "./fga-config.js";
 import {
   createOpenFgaClientForServer,
   resolveModelId,
@@ -11,7 +11,7 @@ import {
 
 export type DynamicServerEntry = {
   client: OpenFgaClientType;
-  profile: FgaServerConfig & { name: string };
+  profile: FgaServerConfig & { name: string; fixed_scoped?: boolean };
 };
 
 export type ScopeRegistry = {
@@ -44,17 +44,14 @@ export type ConnectServerInput = {
   connectionScope?: string;
   requestedName?: string;
   apiUrl: string;
-  apiToken?: string;
-  clientId?: string;
-  clientSecret?: string;
-  issuer?: string;
-  audience?: string;
-  scopes?: string;
+  auth?: import("./fga-config.js").ServerAuth;
   label?: string;
   defaultStore?: string;
   defaultModel?: string;
   restrict?: boolean;
   writeable?: boolean;
+  fixedFromConfig?: boolean;
+  serverName?: string;
 };
 
 export type ConnectServerResult = {
@@ -70,7 +67,8 @@ export type ListedDynamicServer = {
   name: string;
   api_url: string;
   default: boolean;
-  fixed: false;
+  fixed: boolean;
+  connected: boolean;
   default_store?: string;
   default_model?: string;
   restrict: boolean;
@@ -271,6 +269,11 @@ export class DynamicScopeStore {
 
     const maxServers = this.config.maxServersPerScope;
     const normalizedUrl = normalizeApiUrl(input.apiUrl);
+
+    if (input.fixedFromConfig && input.serverName) {
+      return this.connectFixedScopedServer(scopeId, registry, input, maxServers);
+    }
+
     const existingByUrl = [...registry.servers.entries()].find(
       ([, entry]) => normalizeApiUrl(entry.profile.api_url) === normalizedUrl,
     );
@@ -282,19 +285,10 @@ export class DynamicScopeStore {
     }
 
     const assignment = assignServerName(registry, input.requestedName, input.apiUrl);
-    const auth = buildServerAuth({
-      apiToken: input.apiToken,
-      clientId: input.clientId,
-      clientSecret: input.clientSecret,
-      issuer: input.issuer,
-      audience: input.audience,
-      scopes: input.scopes,
-    });
-
     const profile: FgaServerConfig & { name: string } = {
       name: assignment.name,
       api_url: input.apiUrl.trim(),
-      auth,
+      auth: input.auth,
       label: input.label,
       default_store: input.defaultStore,
       default_model: input.defaultModel,
@@ -329,6 +323,47 @@ export class DynamicScopeStore {
       requestedName: assignment.requestedName,
       renamed: assignment.renamed,
       connected: true,
+      apiUrl: input.apiUrl.trim(),
+    };
+  }
+
+  private async connectFixedScopedServer(
+    scopeId: string,
+    registry: ScopeRegistry,
+    input: ConnectServerInput,
+    maxServers: number | null,
+  ): Promise<ConnectServerResult> {
+    const serverName = input.serverName!;
+    const existing = registry.servers.get(serverName);
+
+    if (!existing && maxServers !== null && registry.servers.size >= maxServers) {
+      throw new Error(
+        `Maximum servers per connection scope (${maxServers}) reached. Disconnect unused servers or set dynamic.max_servers_per_scope in config.`,
+      );
+    }
+
+    const profile: FgaServerConfig & { name: string; fixed_scoped?: boolean } = {
+      name: serverName,
+      api_url: input.apiUrl.trim(),
+      auth: input.auth,
+      label: input.label,
+      default_store: input.defaultStore,
+      default_model: input.defaultModel,
+      restrict: input.restrict,
+      writeable: input.writeable,
+      fixed_scoped: true,
+    };
+
+    const client = await createOpenFgaClientForServer(profile);
+    registry.servers.set(serverName, { client, profile });
+    if (!registry.defaultServer) registry.defaultServer = serverName;
+    registry.lastUsedAt = Date.now();
+
+    return {
+      connectionScope: scopeId,
+      server: serverName,
+      connected: true,
+      renamed: false,
       apiUrl: input.apiUrl.trim(),
     };
   }
@@ -377,7 +412,8 @@ export class DynamicScopeStore {
         name,
         api_url: entry.profile.api_url,
         default: registry.defaultServer === name,
-        fixed: false as const,
+        fixed: entry.profile.fixed_scoped === true,
+        connected: true,
         default_store: policy.defaultStore,
         default_model: policy.defaultModel,
         restrict: policy.restrict,
@@ -437,6 +473,10 @@ export class DynamicScopeStore {
     this.evictIdleScopes();
     const serverRef = this.resolveServerRef(scopeId, server);
     return this.scopes.get(scopeId)!.servers.get(serverRef)!.client;
+  }
+
+  getServerProfile(scopeId: string, serverRef: string): DynamicServerEntry["profile"] | undefined {
+    return this.scopes.get(scopeId)?.servers.get(serverRef)?.profile;
   }
 
   resolveStoreIdForServer(scopeId: string, serverRef: string, store?: string): string {

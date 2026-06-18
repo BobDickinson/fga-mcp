@@ -15,6 +15,23 @@ services:
     networks:
       - fga-mcp-test
 
+  openfga-auth:
+    image: openfga/openfga:latest
+    container_name: fga-mcp-openfga-auth-test
+    command: run
+    environment:
+      - OPENFGA_PLAYGROUND_ENABLED=false
+      - OPENFGA_DATASTORE_ENGINE=memory
+      - OPENFGA_LOG_LEVEL=info
+      - OPENFGA_HTTP_ADDR=0.0.0.0:8080
+      - OPENFGA_GRPC_ADDR=0.0.0.0:8081
+      - OPENFGA_AUTHN_METHOD=preshared
+      - OPENFGA_AUTHN_PRESHARED_KEYS=test-secret
+    ports:
+      - "8082:8080"
+    networks:
+      - fga-mcp-test
+
   test-runner:
     build:
       context: .
@@ -22,9 +39,12 @@ services:
     container_name: fga-mcp-test-runner
     depends_on:
       - openfga
+      - openfga-auth
     environment:
       - OPENFGA_MCP_API_URL=http://openfga:8080
       - OPENFGA_MCP_API_WRITEABLE=true
+      - OPENFGA_AUTH_API_URL=http://openfga-auth:8080
+      - OPENFGA_AUTH_PRESHARED_KEY=test-secret
     volumes:
       - ./coverage:/app/coverage
     command: ["npm", "run", "test:integration"]

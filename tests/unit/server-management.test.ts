@@ -3,6 +3,11 @@ import * as serverManagement from "../../src/tools/handlers/server-management.js
 import { createDynamicContext, createMockContext, createMultiServerContext, createOfflineContext } from "../helpers/mock-client.js";
 import { setOnlineWritableMode } from "../helpers/env.js";
 
+vi.mock("../../src/auth-probe.js", () => ({
+  probeOpenFgaAuth: vi.fn(async () => ({ status: "open" })),
+  validateOpenFgaAuth: vi.fn(async () => true),
+}));
+
 vi.mock("../../src/server-pool.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../../src/server-pool.js")>();
   return {
@@ -85,8 +90,9 @@ describe("server management tools", () => {
   it("rejects connect when runtime connect is disabled", async () => {
     const ctx = createDynamicContext({ allowDynamicConnect: false, fixedClients: { dev: {} } });
     ctx.dynamicStore = null;
-    const result = await serverManagement.connectServer(ctx, { api_url: "http://127.0.0.1:8080" });
-    expect(result).toContain("Dynamic connections are disabled");
+    await expect(serverManagement.connectServer(ctx, { api_url: "http://127.0.0.1:8080" })).rejects.toThrow(
+      "Dynamic connections are disabled",
+    );
   });
 
   it("lists fixed and dynamic servers when connection_scope is passed", async () => {
@@ -101,14 +107,12 @@ describe("server management tools", () => {
     expect(result).toMatchObject({
       dynamic_connections_enabled: true,
       connection_scope: connected.connection_scope,
-      servers: expect.arrayContaining([
-        expect.objectContaining({ name: "dev", fixed: true }),
-        expect.objectContaining({ name: "staging", fixed: false, default: true }),
-      ]),
+      servers: [
+        expect.objectContaining({ name: "staging", fixed: false, default: true, connected: true }),
+      ],
     });
     const servers = (result as { servers: Array<{ fixed: boolean }> }).servers;
-    expect(servers.filter((s) => s.fixed)).toHaveLength(1);
-    expect(servers.filter((s) => !s.fixed)).toHaveLength(1);
+    expect(servers).toHaveLength(1);
   });
 
   it("lists dynamic-only servers in scope when no fixed pool", async () => {

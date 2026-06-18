@@ -12,6 +12,8 @@ import {
 } from "./resources/index.js";
 import { registerDocumentationTools } from "./tools/documentation.js";
 import { registerModelTools, registerRelationshipTools, registerServerManagementTools, registerStoreTools } from "./tools/openfga.js";
+import { registerElicitationSupport } from "./elicitation/register-elicitation.js";
+import { registerAuthRoutes } from "./auth/routes.js";
 
 export const SERVER_NAME = "OpenFGA MCP Server";
 export const SERVER_VERSION = "1.0.0";
@@ -125,6 +127,10 @@ export function createMcpServer(): FastMCP {
 }
 
 export function registerMcpCapabilities(server: FastMCP, ctx: ServerContext): void {
+  registerElicitationSupport(server);
+  if (ctx.transport === "http") {
+    registerAuthRoutes(server, ctx);
+  }
   registerServerManagementTools(server, ctx);
   registerStoreTools(server, ctx);
   registerRelationshipTools(server, ctx);

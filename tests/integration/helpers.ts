@@ -19,9 +19,19 @@ type document
 let sharedClient: OpenFgaClient | null = null;
 const testStoreIds: string[] = [];
 let integrationApiUrl = "http://localhost:8080";
+let integrationAuthApiUrl = process.env.OPENFGA_AUTH_API_URL ?? "http://localhost:8082";
+const integrationAuthPresharedKey = process.env.OPENFGA_AUTH_PRESHARED_KEY ?? "test-secret";
 
 export function getTestApiUrl(): string {
   return integrationApiUrl;
+}
+
+export function getTestAuthApiUrl(): string {
+  return integrationAuthApiUrl;
+}
+
+export function getTestAuthPresharedKey(): string {
+  return integrationAuthPresharedKey;
 }
 
 export function restoreIntegrationEnv(): void {
@@ -135,10 +145,14 @@ export async function setupTestStoreWithModel(dsl?: string): Promise<{ store: st
 
 export async function initIntegrationTests(): Promise<void> {
   integrationApiUrl = process.env.OPENFGA_MCP_API_URL ?? "http://localhost:8080";
+  integrationAuthApiUrl = process.env.OPENFGA_AUTH_API_URL ?? "http://localhost:8082";
   process.env.OPENFGA_MCP_API_URL = integrationApiUrl;
   process.env.OPENFGA_MCP_API_WRITEABLE = "true";
 
   await waitForOpenFGA(integrationApiUrl);
+  if (process.env.OPENFGA_AUTH_API_URL) {
+    await waitForOpenFGA(integrationAuthApiUrl);
+  }
   sharedClient = new OpenFgaClient({ apiUrl: integrationApiUrl });
 }
 
