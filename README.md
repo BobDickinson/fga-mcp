@@ -1,76 +1,88 @@
-# fga-mcp
+<div align="center">
+  <p><a href="https://openfga.dev"><img src="assets/openfga.png" width="100" alt="OpenFGA" /></a></p>
 
-TypeScript MCP server for [OpenFGA](https://openfga.dev/) and [Auth0 FGA](https://auth0.com/fine-grained-authorization). Gives agents tools, resources, prompts, and bundled documentation for working with fine-grained authorization — with or without a live OpenFGA server. 
+  <h1>fga-mcp</h1>
+
+  <p>MCP server for <a href="https://openfga.dev/">OpenFGA</a> and <a href="https://auth0.com/fine-grained-authorization">Auth0 FGA</a></p>
+</div>
+
+<p><br /></p>
+
+Gives agents tools, resources, prompts, and bundled documentation for working with fine-grained authorization — with or without a live OpenFGA server.
+
+## Use cases
+
+- **Plan & design** — Design authorization models using best-practice patterns, prompts, and local DSL validation
+- **Generate code** — Produce accurate SDK integrations leveraging bundled documentation search and code examples
+- **Manage instances** — Query and control live OpenFGA servers (stores, models, tuples) via [live servers](#live-servers)
+
+## Contents
+
+- [About](#about)
+- [Core features](#core-features)
+- [Live servers](#live-servers)
+- [Getting started](#getting-started)
+- [FGA config file](#fga-config-file)
+- [How agents route requests](#how-agents-route-requests)
+- [How runtime authentication works](#how-runtime-authentication-works)
+- [Tool and resource catalog](#tool-and-resource-catalog)
+- [Configuration reference](#configuration-reference)
+- [Development](#development)
+- [License](#license)
+
+## About
 
 Derived from the PHP-based [openfga-mcp](https://github.com/evansims/openfga-mcp) by [Evan Sims](https://github.com/evansims) ([Apache-2.0](https://www.apache.org/licenses/LICENSE-2.0)). This TypeScript port has the same configuration, tools, resources, prompts, and documentation features. The model authoring guide ([`docs/AUTHORING_OPENFGA_MODELS.md`](docs/AUTHORING_OPENFGA_MODELS.md)) is adapted from [openfga-modeling-mcp](https://github.com/aaguiarz/openfga-modeling-mcp) by [Andrés Aguiar](https://github.com/aaguiarz) ([MIT](https://opensource.org/licenses/MIT)).
 
-This MCP server also adds support for multiple configured FGA servers, dynamic FGA server connections, and agent-isolated (out-of-band) authentication to FGA servers that require authentication.
+This MCP server extends the original with multiple fixed servers, dynamic connections, and agent-isolated (out-of-band) authentication — see [Live servers](#live-servers).
 
 Built with [FastMCP](https://github.com/punkpeye/fastmcp), [@modelcontextprotocol/sdk](https://www.npmjs.com/package/@modelcontextprotocol/sdk), [@openfga/sdk](https://www.npmjs.com/package/@openfga/sdk), and [@openfga/syntax-transformer](https://www.npmjs.com/package/@openfga/syntax-transformer). Requires Node.js **20+**.
 
-## Operating modes
+## Core features
 
-fga-mcp runs in one of three modes depending on how you configure it at startup. The agent sees the same MCP tools, resources, and prompts in each mode; what changes is whether it can interact with **live OpenFGA servers** and how those connections are set up.
+Bundled documentation, prompts, and local tools for authorization modeling — no live OpenFGA connection required:
 
-### Offline
+- OpenFGA SDK documentation, search, and code examples
+- Model design and troubleshooting **prompts**
+- **`verify_model`** — validate authorization model DSL locally
 
-No OpenFGA URL or FGA config is supplied. The server exposes **documentation, prompts, and local tools** only — no store, model, or tuple operations against a live server.
+## Live servers
 
-Use offline mode when you want an agent to:
+Configure an MCP server instance to talk to real OpenFGA backends. Fixed and dynamic connectivity are separate options — use either, both, or neither. When FGA requires credentials not in config, see [How runtime authentication works](#how-runtime-authentication-works).
 
-- Research OpenFGA concepts and read bundled docs
-- Design authorization models (`verify_model`, authoring prompts)
-- Explore DSL syntax and write FGA client code with doc search
-- Troubleshoot relationship modeling without touching a live store
+### Fixed servers
 
-### Online — fixed servers
+Define one or more named servers (`dev`, `prod`, …) in the FGA config file (`--config`). fga-mcp loads those profiles at startup.
 
-Supply an **FGA config file** (`--config`) with one or more named servers (`dev`, `prod`, …). fga-mcp loads those profiles at startup.
+When a server has an **`auth` block** (or FGA allows unauthenticated access), agents call admin tools with an optional `server` name (or `default_server`) and optional `store` / `model` — no connection management. Credentials and policy live in the config file.
 
-When a server has an **`auth` block** in config (or FGA allows unauthenticated access), agents call tools and read resources **without managing connections** — they pass an optional `server` name (or rely on `default_server`) and optional `store` / `model`. That is the usual production pattern: credentials and policy live in your config file.
+When a fixed server is listed **without** `auth` but FGA requires authentication, the agent will drive [runtime authentication](#how-runtime-authentication-works) via `connect_server({ server })` when `list_servers` shows `auth_status: connect_required`.
 
-When a fixed server is listed in config **without** `auth` but the OpenFGA backend requires authentication, credentials are collected at runtime via an **out-of-band browser flow** (HTTP only). Call `connect_server({ server })` when `list_servers` shows `auth_status: connect_required`. See [Runtime authentication](#runtime-authentication).
+### Dynamic connections
 
-### Online — dynamic servers (optional)
+Set **`allow_dynamic_connections: true`** so agents can call **`connect_server({ api_url })`** to attach backends not listed in config.
 
-When `allow_dynamic_connections: true` in the FGA config, agents can call **`connect_server({ api_url })`** to attach additional OpenFGA backends (dynamic tier). If that backend requires authentication, credentials are collected via the same out-of-band browser flow on connect — see [Runtime authentication](#runtime-authentication).
+Each connect (fixed auth-required or dynamic) mints or extends a **`connection_scope`** (UUID). Scoped tool calls pass that scope plus `server`. **`connect_server({ server })`** for fixed auth-required servers does not require `allow_dynamic_connections`.
 
-**`connect_server({ server })`** for fixed servers with `auth_status: connect_required` is separate — it does not require `allow_dynamic_connections`. Each connect mints or extends a **`connection_scope`** (UUID); subsequent scoped tool calls pass that scope plus `server`.
+| | Fixed servers | Dynamic connections |
+|---|---------------|---------------------|
+| **Enable** | `servers.*` in FGA config | `allow_dynamic_connections: true` |
+| **Typical use** | Known dev/prod backends | Ad-hoc or agent-discovered URLs |
+| **Routing** | `server` param (and `connection_scope` when scoped) | `connect_server({ api_url })` → `connection_scope` + `server` |
 
-Dynamic servers suit local experimentation, ad-hoc OpenFGA servers, or controlled multi-tenant HTTP deployments. Fixed servers remain available alongside dynamic ones — omit `connection_scope` to target the fixed pool.
+Call **`list_servers`** to discover fixed servers (`auth_status: connect_required` when connect is needed), whether dynamic connect is enabled (`dynamic_connections_enabled`), and — with `connection_scope` — scoped entries with **`connected`**.
 
-| Mode | Config | Agent connection management |
-|------|--------|----------------------------|
-| Offline | None | N/A — docs and local tools only |
-| Fixed | `--config` with `servers.*` | None — use `server` param or default |
-| Dynamic (`api_url`) | `--config` with `allow_dynamic_connections: true` | `connect_server({ api_url })` → `connection_scope` + `server` |
-| Fixed auth (HTTP) | Fixed server in config, no `auth`, FGA requires auth | `connect_server({ server })` → `connection_scope` + `server` |
+See [Dynamic connection settings](#dynamic-connection-settings) for scope limits, workflow, and transport rules.
 
-Call **`list_servers`** to discover fixed servers (`auth_status: connect_required` when connect is needed; field omitted when fixed direct works), whether dynamic `api_url` connect is enabled (`dynamic_connections_enabled`), and — with `connection_scope` — scoped entries with **`connected`**.
+## Getting started
 
-### Runtime authentication
+Works with [Cursor](https://cursor.sh), [Claude Desktop](https://claude.ai/download), [Claude Code](https://www.anthropic.com/claude-code), and other MCP clients.
 
-OpenFGA credentials belong in the FGA config **`auth` block** or are collected **out of band** at runtime. They are **never** passed in tool arguments and never exposed to the MCP client (agent) or its models — the operator authenticates in a browser; fga-mcp stores credentials server-side only.
+Configuration is passed as **CLI args** (preferred). The same args work for stdio subprocess launch and for running a standalone HTTP server. Environment variables are a fallback when a client cannot pass args — see [Configuration reference](#configuration-reference).
 
-This requires **`--transport http`**. On stdio, put credentials in config or use an open FGA server.
+### 1. Core features
 
-| Scenario | When auth is elicited |
-|----------|------------------------|
-| **Fixed server** — in config, no `auth`, FGA requires auth | On `connect_server({ server })` when `list_servers` shows `auth_status: connect_required` |
-| **Dynamic server** — `connect_server({ api_url })` | On connect, when the target FGA requires auth |
-| **Scoped connection** — credentials expired or rejected | When an FGA tool returns 401; retry that tool after completing auth |
-
-**Agent flow:** the connect or FGA tool returns an auth URL. Open it in a browser, submit credentials, then **retry the same tool call** with identical arguments. Hosted forms are served at `/auth/elicit/:id` on the same origin as `/mcp`.
-
-For MCP response shapes, FastMCP patch notes, and `--public-url`, see [Auth elicitation (HTTP)](#auth-elicitation-http) below and [`specs/openfga-auth-elicitation.md`](specs/openfga-auth-elicitation.md).
-
-## Quick start
-
-Configuration is passed as **CLI args** (preferred). The same args work for stdio subprocess launch and for running a standalone HTTP server. Environment variables are a fallback when a client cannot pass args — see [Environment variables](#environment-variables).
-
-### 1. Offline (stdio)
-
-Cursor / Claude Desktop — no OpenFGA connection:
+Documentation, prompts, and `verify_model` — no `--config` required:
 
 ```json
 {
@@ -83,9 +95,9 @@ Cursor / Claude Desktop — no OpenFGA connection:
 }
 ```
 
-### 2. Online with fixed servers (stdio)
+### 2. Live servers (stdio)
 
-Point at an FGA config file with your servers. The MCP client spawns fga-mcp as a subprocess over stdio:
+Add `--config` for store, model, and tuple tools (core features remain available):
 
 ```json
 {
@@ -98,7 +110,47 @@ Point at an FGA config file with your servers. The MCP client spawns fga-mcp as 
 }
 ```
 
-Example `fga-mcp.json`:
+> **Safety:** Write operations are disabled by default (`writeable: false`). Set `writeable: true` on a server profile or in `defaults` to allow mutations.
+
+Minimal `fga-mcp.json` — see [FGA config file](#fga-config-file) for multi-server, auth, and policy examples.
+
+### 3. HTTP transport
+
+Run fga-mcp as a standalone HTTP MCP server (with or without `--config`):
+
+```bash
+npx fga-mcp --config ./fga-mcp.json --transport http --host 127.0.0.1 --port 9090
+```
+
+MCP endpoint: `http://127.0.0.1:9090/mcp` (streamable HTTP). By default responses stream over this endpoint; use `--no-sse` for JSON-only responses if your client requires it.
+
+**Client config** (Cursor, Claude Desktop, or other streamable-HTTP MCP clients):
+
+```json
+{
+  "mcpServers": {
+    "OpenFGA": {
+      "url": "http://127.0.0.1:9090/mcp"
+    }
+  }
+}
+```
+
+HTTP suits Docker, shared hosts, and reverse-proxy deployments. Put edge authentication and rate limiting in front of fga-mcp; it does not replace that layer. [Runtime authentication](#how-runtime-authentication-works) requires HTTP transport when credentials are not in config.
+
+## FGA config file
+
+The FGA config JSON is the primary way to define OpenFGA servers, defaults, and policy. Pass it with `--config <path>` or, when CLI args are unavailable, via `OPENFGA_MCP_CONFIG` (file path or inline JSON for containers).
+
+| Field | Default | Purpose |
+|-------|---------|---------|
+| `default_server` | First server / `default` | Default `server` when omitted on tool calls |
+| `allow_dynamic_connections` | **`false`** | Enable dynamic connections — `connect_server({ api_url })`; opt-in only |
+| `defaults.*` | `writeable: false`, `restrict: false` | Global policy and store/model defaults |
+| `servers.*` | — | Fixed OpenFGA servers loaded at startup |
+| `dynamic.*` | See [Dynamic connection settings](#dynamic-connection-settings) | Scope TTL and caps |
+
+**Example** — multi-server with policy and auth:
 
 ```json
 {
@@ -125,96 +177,6 @@ Example `fga-mcp.json`:
 }
 ```
 
-Write operations are disabled by default (`writeable: false`). Set `writeable: true` on a server profile or in `defaults` to allow store/model/tuple mutations.
-
-On **stdio**, put OpenFGA credentials in each server’s `auth` block (or use an open FGA server). Browser-based credential elicitation requires **`--transport http`**. On HTTP, omit `connection_scope` for fixed servers unless `list_servers` shows **`auth_status: connect_required`**.
-
-### 3. HTTP transport
-
-Run fga-mcp as a **standalone HTTP MCP server**, then point any MCP client at its URL. Use the **same `--config` and transport flags** you would pass on the CLI — the FGA config file is shared between stdio and HTTP deployments.
-
-HTTP transport is required for **URL-mode auth elicitation** (runtime credential collection via browser when `auth` is omitted from config). Hosted auth forms are served on the same origin as `/mcp`.
-
-**Start the server:**
-
-```bash
-npx fga-mcp --config ./fga-mcp.json --transport http --host 127.0.0.1 --port 9090
-```
-
-The server listens for MCP streamable HTTP at `http://127.0.0.1:9090/mcp` (SSE also available at `/sse`).
-
-**Connect a client by URL** (Cursor, Claude Desktop, or other streamable-HTTP MCP clients):
-
-```json
-{
-  "mcpServers": {
-    "OpenFGA": {
-      "url": "http://127.0.0.1:9090/mcp"
-    }
-  }
-}
-```
-
-HTTP is useful when the MCP server runs in Docker, on a shared host, or behind your own auth proxy. Put authentication and rate limiting at the HTTP edge; fga-mcp does not replace that layer.
-
-For production HTTP deployments, prefer **fixed servers with `auth` in config** when possible. Set `allow_dynamic_connections: false` unless agents must register arbitrary `api_url` backends. When using scoped servers (dynamic or fixed `connect_required`), **`connection_scope` is required** on HTTP for all FGA tool calls (stdio may omit it when exactly one scope exists).
-
-### Auth elicitation (HTTP)
-
-Details for operators and integrators. The [runtime auth model](#runtime-authentication) above is the summary agents and config authors need.
-
-When an OpenFGA server requires authentication and credentials are not in the FGA config, fga-mcp serves a **hosted auth form** at `/auth/elicit/:id` on the same origin as `/mcp`. Supported methods: pre-shared key and OIDC client credentials.
-
-**Configuration:**
-
-- `--public-url` / `OPENFGA_MCP_PUBLIC_URL` — browser-reachable origin for elicitation links (defaults to `http://127.0.0.1:<port>`).
-- Credentials are never accepted in `connect_server` tool parameters — only via the hosted form or FGA config `auth` block.
-
-**Client response shape:** MCP clients that declare URL elicitation receive error code `-32042` with the auth URL; others receive a structured tool error that includes the same URL. Both use the same hosted form.
-
-**FastMCP patch:** URL elicitation (`-32042`) requires a local `patch-package` fix to FastMCP 4.3.0 (`patches/fastmcp+4.3.0.patch`) so `UrlElicitationRequiredError` is not wrapped as a generic tool error. Applied on `npm install` via `postinstall`. Remove after upstream fix ([issue #162](https://github.com/punkpeye/fastmcp/issues/162)).
-
-**stdio:** URL elicitation is unavailable. Put credentials in the FGA config `auth` block, use an open FGA server, or run with `--transport http`.
-
-### From npm or source
-
-```bash
-npx fga-mcp --help
-```
-
-```bash
-git clone https://github.com/BobDickinson/fga-mcp.git
-cd fga-mcp
-npm install
-npm run build
-node dist/index.js --config ./fga-mcp.json
-```
-
-For development with hot reload, use `tsx` on `src/index.ts` in the MCP client `command` / `args` instead of `npx fga-mcp`.
-
-### Docker
-
-```bash
-docker build -t fga-mcp .
-docker run --rm -p 9090:9090 fga-mcp \
-  --config /path/in/container/fga-mcp.json \
-  --transport http --host 0.0.0.0 --port 9090
-```
-
-Mount your FGA config into the container. Port `9090` is exposed for HTTP transport.
-
-## FGA config file
-
-The FGA config JSON is the primary way to define OpenFGA servers, defaults, and policy. Pass it with `--config <path>` or, when CLI args are unavailable, via `OPENFGA_MCP_CONFIG` (file path or inline JSON for containers).
-
-| Field | Default | Purpose |
-|-------|---------|---------|
-| `default_server` | First server / `default` | Default `server` when omitted on tool calls |
-| `allow_dynamic_connections` | **`false`** | Enable dynamic tier — `connect_server({ api_url })` for arbitrary backends; opt-in only |
-| `defaults.*` | `writeable: false`, `restrict: false` | Global policy and store/model defaults |
-| `servers.*` | — | Fixed OpenFGA servers loaded at startup |
-| `dynamic.*` | See [Dynamic tier](#dynamic-tier) | Scope TTL and caps (ignored when `allow_dynamic_connections` is false; fixed `connect_server({ server })` uses the same scope store) |
-
 Per-server `default_store` and `default_model` belong on each entry in multi-server setups. Top-level `defaults.default_store` / `default_model` apply to legacy single-server env bootstrap only.
 
 When no `--config` is passed, legacy `OPENFGA_MCP_API_*` environment variables bootstrap a single fixed server named `default` (or `OPENFGA_MCP_DEFAULT_SERVER`). Prefer the config file for new setups — see [Migrating from legacy env](#migrating-from-legacy-env).
@@ -228,9 +190,9 @@ When no `--config` is passed, legacy `OPENFGA_MCP_API_*` environment variables b
 
 A read-only prod server uses `restrict: true` with `writeable: false`. Legacy env setups that relied on `OPENFGA_MCP_API_RESTRICT=true` blocking writes should set **both** in FGA config — `restrict` alone no longer disables writes.
 
-## Dynamic tier
+### Dynamic connection settings
 
-Runtime connect is **disabled by default**. Enable it in the FGA config:
+Runtime connect is **disabled by default**. Enable in FGA config:
 
 ```json
 {
@@ -250,7 +212,7 @@ Omit `dynamic` for defaults (`scope_idle_ttl_seconds`: 86400, `max_servers_per_s
 
 **Workflow:**
 
-1. Call `connect_server({ api_url })`. If FGA requires auth, complete the [out-of-band auth flow](#runtime-authentication) and retry. Response includes `connection_scope` and the **assigned** `server` name.
+1. Call `connect_server({ api_url })`. If FGA requires auth, the agent completes [runtime authentication](#how-runtime-authentication-works) and retries. Response includes `connection_scope` and the **assigned** `server` name.
 2. Pass both on subsequent admin and relationship tool calls.
 3. Call `disconnect_server` when done. Removing the last server in a scope drops the scope.
 
@@ -262,24 +224,57 @@ Omit `dynamic` for defaults (`scope_idle_ttl_seconds`: 86400, `max_servers_per_s
 | Max dynamic scopes | 1 | `dynamic.max_scopes` (default 100) |
 | Idle scope cleanup | Process exit | `dynamic.scope_idle_ttl_seconds` (default 24h) |
 
-Scope IDs are unguessable UUIDs minted by the server — pass them on tool arguments. Tokens and secrets are never logged.
+Scope IDs are unguessable UUIDs minted by the server. Tokens and secrets are never logged.
 
-## Agent routing
+## How agents route requests
 
-Admin and relationship tools accept optional routing parameters:
+Reference for how live-server tool calls work internally. **You do not pass routing parameters** — agents discover servers via `list_servers`, call `connect_server` when needed, and supply routing on subsequent tool calls automatically.
 
 | Parameter | Applies to | Description |
 |-----------|------------|-------------|
-| `connection_scope` | Admin tools, relationship tools (dynamic tier) | Scope UUID from `connect_server`; omit for fixed servers |
+| `connection_scope` | Admin tools, relationship tools (scoped connections) | Scope UUID from `connect_server`; omitted for unscoped fixed servers |
 | `server` | Admin tools, relationship tools | Named OpenFGA server (fixed config or assigned dynamic name) |
 | `store` | Relationship tools | Store ID; falls back to server `default_store` |
 | `model` | Relationship tools | Model ID; falls back to server `default_model` or `"latest"` |
 
-Use **`list_servers`** to see fixed servers and `dynamic_connections_enabled`. Pass `connection_scope` to also list dynamic servers for that scope. Use **`set_default_server`** to change the default within the fixed pool or a dynamic scope.
+Agents call **`list_servers`** to see fixed servers and whether dynamic connect is enabled; with a `connection_scope`, to list scoped entries. They may call **`set_default_server`** to change the default within the fixed pool or a scoped connection.
 
-When multiple fixed servers exist, admin resource URIs are server-prefixed (`openfga://server/{server}/store/...`). With runtime connect, dynamic reads use scope-prefixed URIs (`openfga://scope/{connectionScope}/server/{server}/store/...`). Tool calls and resource reads share the same resolution rules.
+Resource URIs follow the same rules: server-prefixed when multiple fixed servers exist (`openfga://server/{server}/store/...`); scope-prefixed for dynamic connections (`openfga://scope/{connectionScope}/server/{server}/store/...`).
 
-## Features
+On HTTP, scoped connections require `connection_scope` on FGA tool calls (stdio may omit it when exactly one scope exists). This is enforced by the server; agents learn scope IDs from `connect_server` responses.
+
+## How runtime authentication works
+
+Reference for out-of-band credential collection. **Nothing to configure per session** beyond your FGA config and transport choice (below). When auth is needed, the agent receives an auth URL from a tool error, **you complete the browser form once**, and the agent retries the same tool call.
+
+**What you configure (once):**
+
+- Put credentials in the FGA config **`auth` block**, **or**
+- Run with **`--transport http`** so fga-mcp can host the auth form (stdio requires config `auth` or an open FGA server)
+- Optionally set `--public-url` / `OPENFGA_MCP_PUBLIC_URL` when the auth page is not at `http://127.0.0.1:<port>`
+
+Credentials are **never** passed in tool arguments or exposed to the agent or model — fga-mcp stores them server-side only.
+
+**What the agent does automatically:**
+
+| Scenario | When elicitation fires |
+|----------|------------------------|
+| Fixed server in config, no `auth`, FGA requires auth | `connect_server({ server })` when `list_servers` shows `auth_status: connect_required` |
+| Dynamic connection | `connect_server({ api_url })` when the target FGA requires auth |
+| Scoped connection, credentials expired | An FGA tool returns 401; agent re-elicits; retry after you complete the form |
+
+**What you do when prompted:** open the auth URL (often opened by the MCP client), submit credentials in the browser, then let the agent retry. Hosted forms are at `/auth/elicit/:id` on the same origin as `/mcp` (pre-shared key or OIDC client credentials).
+
+<details>
+<summary>Integrator details (response shape, patch)</summary>
+
+MCP clients that declare URL elicitation receive error code `-32042` with the auth URL; others receive a structured tool error with the same URL. Wire-format details: [`specs/openfga-auth-elicitation.md`](specs/openfga-auth-elicitation.md).
+
+URL elicitation requires a `patch-package` fix to FastMCP 4.3.0 (applied on `npm install`) until [upstream #162](https://github.com/punkpeye/fastmcp/issues/162) lands.
+
+</details>
+
+## Tool and resource catalog
 
 ### Tools (21)
 
@@ -291,18 +286,18 @@ When multiple fixed servers exist, admin resource URIs are server-prefixed (`ope
 
 ### Resources
 
-Admin resource templates are registered **at startup based on FGA config**. Documentation resources (`openfga://docs/...`) are always available and do not require a live OpenFGA instance.
+Admin resource templates are registered **at startup based on FGA config**. Documentation resources (`openfga://docs/...`) are part of [core features](#core-features) and do not require live servers.
 
-| Deployment | Admin URI tier | Example |
-|------------|----------------|---------|
-| Offline (no servers) | None — docs only | `openfga://docs` |
-| Single fixed server, no runtime connect | **Legacy** — server implicit | `openfga://store/{storeId}/model/{modelId}` |
+| Deployment | Admin URI pattern | Example |
+|------------|-------------------|---------|
+| Core features only (no FGA config) | None — docs only | `openfga://docs` |
+| Single fixed server | **Legacy** — server implicit | `openfga://store/{storeId}/model/{modelId}` |
 | Multiple fixed servers | **Server-prefixed** | `openfga://server/{server}/store/{storeId}/...` |
-| Runtime connect enabled | **Scope-prefixed** for dynamic reads | `openfga://scope/{connectionScope}/server/{server}/store/{storeId}/...` |
+| Dynamic connections enabled | **Scope-prefixed** for scoped reads | `openfga://scope/{connectionScope}/server/{server}/store/{storeId}/...` |
 
-When both fixed and dynamic tiers are enabled, both template families are registered. Dynamic-tier resource names use a `_scoped` suffix when they coexist with fixed-tier templates.
+When both fixed servers and dynamic connections are enabled, both template families are registered. Scoped resource names use a `_scoped` suffix when they coexist with fixed-server templates.
 
-Seven documentation endpoints are always registered. With a single fixed server online, add one static `list_stores` resource and nine admin templates (17 total endpoints).
+Seven documentation endpoints are always registered. With a single fixed server, add one static `list_stores` resource and nine admin templates (17 total endpoints).
 
 ### Prompts (17)
 
@@ -310,11 +305,13 @@ Model design, authoring guidance, security guidance, and relationship troublesho
 
 ### Completions
 
-When connected to a live OpenFGA instance, argument completion is provided for store IDs, model IDs, relations, users, objects, and documentation identifiers.
+When connected to a live OpenFGA server, argument completion is provided for store IDs, model IDs, relations, users, objects, and documentation identifiers.
 
-## CLI reference
+## Configuration reference
 
-Runtime transport settings use CLI flags first, then env, then defaults:
+CLI flags take precedence over environment variables, then defaults. FGA connection settings (`servers`, `defaults`, `allow_dynamic_connections`, …) belong in the **config file**, not on the CLI.
+
+### CLI flags
 
 | Flag | Env fallback | Default |
 |------|--------------|---------|
@@ -322,35 +319,31 @@ Runtime transport settings use CLI flags first, then env, then defaults:
 | `--transport stdio\|http` | `OPENFGA_MCP_TRANSPORT` | `stdio` |
 | `--host <addr>` | `OPENFGA_MCP_TRANSPORT_HOST` | `127.0.0.1` |
 | `--port <n>` | `OPENFGA_MCP_TRANSPORT_PORT` | `9090` |
-| `--sse` / `--no-sse` | `OPENFGA_MCP_TRANSPORT_SSE` | `true` |
+| `--sse` / `--no-sse` | `OPENFGA_MCP_TRANSPORT_SSE` | `true` (streaming on `/mcp`; `--no-sse` for JSON responses) |
 | `--stateless` / `--no-stateless` | `OPENFGA_MCP_TRANSPORT_STATELESS` | `false` |
-| `--public-url <origin>` | `OPENFGA_MCP_PUBLIC_URL` | — (see below) |
+| `--public-url <origin>` | `OPENFGA_MCP_PUBLIC_URL` | — |
 | `--debug` / `--no-debug` | `OPENFGA_MCP_DEBUG` | `true` |
 
-FGA connection settings (`servers`, `defaults`, `allow_dynamic_connections`, …) belong in the **config file**, not on the CLI. The same config file works for stdio subprocess and HTTP server launch modes.
+`--public-url` is the browser-reachable origin for [runtime authentication](#how-runtime-authentication-works) links (e.g. `https://fga-mcp.example.com`). Omit for local dev — defaults to `http://127.0.0.1:<port>`. Distinct from `--host` (bind address only).
 
-`--public-url` is the browser-reachable origin for auth elicitation links (e.g. `https://fga-mcp.example.com`). Omit for local dev — defaults to `http://127.0.0.1:<port>`. Distinct from `--host`, which is the bind address only.
+### Environment variables
 
-## Environment variables
+Use when an MCP client cannot pass CLI args, or for legacy single-server bootstrap without a config file.
 
-Use env vars when an MCP client cannot pass CLI args (e.g. some hosted runners), or for legacy single-server bootstrap without a config file.
-
-### Transport and runtime
+**Transport and runtime:**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `OPENFGA_MCP_TRANSPORT` | `stdio` | `stdio` or `http` |
 | `OPENFGA_MCP_TRANSPORT_HOST` | `127.0.0.1` | HTTP bind address |
 | `OPENFGA_MCP_TRANSPORT_PORT` | `9090` | HTTP port |
-| `OPENFGA_MCP_TRANSPORT_SSE` | `true` | Enable SSE for HTTP transport |
+| `OPENFGA_MCP_TRANSPORT_SSE` | `true` | Streamable HTTP on `/mcp` when `true`; JSON responses when `false` |
 | `OPENFGA_MCP_TRANSPORT_STATELESS` | `false` | Stateless HTTP sessions |
-| `OPENFGA_MCP_PUBLIC_URL` | | Public origin for auth elicitation URLs (e.g. `https://fga-mcp.example.com`); default `http://127.0.0.1:<port>` |
+| `OPENFGA_MCP_PUBLIC_URL` | | Public origin for auth elicitation URLs |
 | `OPENFGA_MCP_DEBUG` | `true` | Write debug logs to `logs/mcp-debug.log` |
 | `OPENFGA_MCP_CONFIG` | | FGA config file path or inline JSON |
 
-### Legacy single-server bootstrap
-
-When no config file is loaded, these env vars create one fixed server named `default` (or `OPENFGA_MCP_DEFAULT_SERVER`):
+**Legacy single-server bootstrap** — when no config file is loaded, these create one fixed server named `default` (or `OPENFGA_MCP_DEFAULT_SERVER`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -382,7 +375,32 @@ When no config file is loaded, these env vars create one fixed server named `def
 4. The bootstrap server is named `default` unless `OPENFGA_MCP_DEFAULT_SERVER` is set.
 5. Call `list_servers` to discover fixed servers and whether `connect_server` is available.
 
-## Project structure
+## Development
+
+### From source
+
+```bash
+git clone https://github.com/BobDickinson/fga-mcp.git
+cd fga-mcp
+npm install
+npm run build
+node dist/index.js --config ./fga-mcp.json
+```
+
+For hot reload, use `tsx` on `src/index.ts` in the MCP client `command` / `args` instead of `npx fga-mcp`.
+
+### Docker
+
+```bash
+docker build -t fga-mcp .
+docker run --rm -p 9090:9090 fga-mcp \
+  --config /path/in/container/fga-mcp.json \
+  --transport http --host 0.0.0.0 --port 9090
+```
+
+Mount your FGA config into the container. Port `9090` is exposed for HTTP transport.
+
+### Project structure
 
 ```
 src/
@@ -397,7 +415,7 @@ src/
   resource-resolver.ts      # Resource URI normalization + resolution
   server.ts                 # Server bootstrap, transport, lifecycle
   config.ts                 # Environment configuration
-  guards.ts                 # Offline/write/restrict checks
+  guards.ts                 # Write/restrict guards
   connect-flow.ts           # connect_server probe + elicitation orchestration
   auth-probe.ts             # Unauthenticated FGA probe + credential validation
   openfga-auth-error.ts     # 401 classifier for re-elicit vs refresh
@@ -414,7 +432,7 @@ src/
 docs/                       # Synced SDK documentation
 ```
 
-## Scripts
+### Scripts
 
 | Command | Description |
 |---------|-------------|
