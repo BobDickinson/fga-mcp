@@ -20,13 +20,16 @@ export type ResolvedConnection = {
   dynamic: boolean;
 };
 
-export function isRuntimeConnectEnabled(ctx: ServerContext): boolean {
-  return ctx.dynamicStore !== null && (ctx.fgaConfig?.allow_runtime_connect ?? false);
+export function isDynamicConnectionsEnabled(ctx: ServerContext): boolean {
+  return ctx.dynamicStore !== null && (ctx.fgaConfig?.allow_dynamic_connections ?? false);
 }
+
+/** @deprecated use isDynamicConnectionsEnabled */
+export const isRuntimeConnectEnabled = isDynamicConnectionsEnabled;
 
 export function requireDynamicStore(ctx: ServerContext): DynamicScopeStore {
   if (!ctx.dynamicStore) {
-    throw new Error("Runtime connect is disabled. Use fixed servers or set allow_runtime_connect: true in FGA config.");
+    throw new Error("Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.");
   }
   return ctx.dynamicStore;
 }

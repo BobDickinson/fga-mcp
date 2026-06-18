@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenFgaClient } from "@openfga/sdk";
 import {
+  buildCredentialsFromAuth,
   createTestPool,
   listFixedServers,
   resolveClient,
@@ -10,10 +11,46 @@ import {
   resolveStoreId,
   setDefaultServer,
 } from "../../src/server-pool.js";
+import { CredentialsMethod } from "@openfga/sdk";
 
 function mockClient(label: string): OpenFgaClient {
   return { listStores: vi.fn().mockResolvedValue({ stores: [] }), label } as unknown as OpenFgaClient;
 }
+
+describe("buildCredentialsFromAuth", () => {
+  it("maps api_token auth to SDK ApiToken credentials", () => {
+    expect(buildCredentialsFromAuth({ method: "api_token", token: "secret" })).toEqual({
+      method: CredentialsMethod.ApiToken,
+      config: { token: "secret", headerName: "Authorization", headerValuePrefix: "Bearer" },
+    });
+  });
+
+  it("maps client_credentials auth to SDK ClientCredentials", () => {
+    expect(
+      buildCredentialsFromAuth({
+        method: "client_credentials",
+        client_id: "id",
+        client_secret: "secret",
+        issuer: "https://issuer.example",
+        audience: "https://api.example/",
+        scopes: "read:tuples write:tuples",
+      }),
+    ).toEqual({
+      method: CredentialsMethod.ClientCredentials,
+      config: {
+        clientId: "id",
+        clientSecret: "secret",
+        apiTokenIssuer: "https://issuer.example",
+        apiAudience: "https://api.example/",
+        scopes: ["read:tuples", "write:tuples"],
+      },
+    });
+  });
+
+  it("returns undefined when auth is omitted", () => {
+    expect(buildCredentialsFromAuth(undefined)).toBeUndefined();
+  });
+});
 
 describe("server pool resolution", () => {
   const pool = createTestPool(

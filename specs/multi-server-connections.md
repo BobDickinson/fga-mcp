@@ -84,42 +84,45 @@ Two tiers:
 
 | Tier | When defined | Who shares it | `connection_scope` | Mutable at runtime |
 |------|----------------|---------------|--------------------|--------------------|
-| **Fixed** | Process startup (config/env) | All clients on this process | **Not used** | No (restart to change) |
-| **Dynamic** | Client via `connect_server` | One scope (isolated registry) | **Required** (HTTP) / returned on first connect (stdio) | Yes |
+| **Fixed direct** | Process startup (config/env) | All clients; config `auth` or open FGA | **Not used** | No (restart to change config) |
+| **Fixed scoped** | Startup config + per-agent `connect_server({ server })` | One scope per agent workflow | **Required** (HTTP) after connect | Creds via scope store |
+| **Dynamic** | Client via `connect_server({ api_url })` | One scope (isolated registry) | **Required** (HTTP) / returned on first connect (stdio) | Yes |
 
 ### Fixed servers (startup config)
 
-- Loaded when the process starts; clients connect to the MCP server and immediately use `server: "dev"` / `server: "prod"`.
-- **`list_servers`** always returns `runtime_connect_enabled` and fixed servers (`fixed: true`). Pass **`connection_scope`** to also include dynamic servers for that scope in the same `servers` list (`fixed: false`).
-- Admin tools with **no** `connection_scope` resolve `server` against the fixed registry.
-- If only fixed servers exist, agents never receive or thread a scope id — simplest ergonomics for the common case.
+- Loaded when the process starts; startup probe may set **`auth_status: connect_required`** on entries that need elicitation — see [auth elicitation](./openfga-auth-elicitation.md#list_servers-discovery).
+- **Fixed direct** (no `auth_status`): admin tools with **no** `connection_scope` resolve `server` against the fixed pool.
+- **Fixed scoped** (`auth_status: connect_required`, HTTP): agent calls **`connect_server({ server: "prod" })`** first — **not gated by `allow_dynamic_connections`**. Subsequent tools pass `connection_scope` + `server`.
+- **`list_servers`** returns `dynamic_connections_enabled` and fixed servers (`fixed: true`). **`auth_status` appears only as `connect_required`** when connect is needed. Pass **`connection_scope`** to list scoped entries with **`connected`**.
 
-### Dynamic servers (runtime connect)
+### Dynamic servers (`connect_server({ api_url })`)
 
-- Enabled when `allow_runtime_connect` is `true` (**default: `false`** — opt-in for local experiments and multi-tenant HTTP; production should use fixed servers).
-- First **`connect_server`** without `connection_scope` **mints** a scope UUID and registers the server in that scope's registry. The response includes the **assigned** `server` name (from optional `requested_name` hint — see [connect_server naming](#connect_server-dynamic-tier)).
-- Subsequent operations pass `connection_scope` + **`server`** (use the assigned name from the connect response, not the hint if they differ).
-- **`list_servers`** **with** `connection_scope` adds dynamic servers for that scope to the `servers` list (fixed servers are always included).
+- Enabled when **`allow_dynamic_connections`** is `true` (**default: `false`** — opt-in for arbitrary runtime backends).
+- First **`connect_server({ api_url })`** without `connection_scope` **mints** a scope UUID. Response includes assigned **`server`** name.
+- Subsequent operations pass `connection_scope` + **`server`**.
 
 ### Resolution rules
 
 ```text
 if connection_scope is provided:
-  resolve server in dynamic registry for that scope
-else:
+  resolve server in scope store (dynamic entries + fixed scoped entries)
+else if fixed server has no auth_status:
   resolve server in fixed registry
-  (error if server not found and runtime connect disabled)
+else if fixed server auth_status is connect_required:
+  error — call connect_server({ server }) first
+else:
+  error if server not found
 ```
 
-Fixed and dynamic registries are **separate namespaces**. The same reference name (e.g. `dev`) may exist in both without collision — `connection_scope` selects which pool. Prefer distinct names in dynamic scopes to avoid agent confusion.
+Fixed config and scope store are **separate namespaces** for server names — scoped fixed entries reuse config names (`fixed: true`). Dynamic assigned names remain `fixed: false`.
 
 ### Typical deployments
 
-| Deployment | Fixed | Dynamic |
-|------------|-------|---------|
-| Cursor stdio, dev + prod in env | `dev`, `prod` | Optional local experiments |
-| Hosted HTTP, locked-down | `dev`, `prod` from secrets | Disabled |
-| Hosted HTTP, multi-tenant experiments | None or shared read-only | Per-agent scopes via `connect_server` |
+| Deployment | Fixed direct | Fixed scoped / Dynamic |
+|------------|--------------|------------------------|
+| Cursor stdio, dev + prod with config `auth` | `dev`, `prod` | Optional `allow_dynamic_connections` experiments |
+| Hosted HTTP, locked-down | `dev`, `prod` with config `auth` | Disabled dynamic; fixed scoped if secret-free config |
+| Hosted HTTP, multi-tenant | Shared read-only fixed direct | Per-agent scopes via fixed scoped connect and/or dynamic `api_url` |
 
 ## Implemented behavior
 
@@ -130,20 +133,20 @@ Fixed and dynamic registries are **separate namespaces**. The same reference nam
 | Store targeting | Optional `store` / `model` on relationship tools; per-server `default_store` / `default_model` |
 | Writeable / restrict | **Independent** per-server policies (`writeable` gates mutations; `restrict` pins store/model) |
 | Runtime URL change | Removed — HTTP `?config=` not supported; use FGA config or `connect_server` |
-| Offline mode | No fixed servers and no `allow_runtime_connect` → documentation/prompts only |
-| Discovery | `list_servers` returns `runtime_connect_enabled` + fixed servers; scoped call adds dynamic servers |
+| Offline mode | No fixed servers and no `allow_dynamic_connections` → documentation/prompts only (fixed scoped connect still requires at least one fixed server in config) |
+| Discovery | `list_servers` returns `dynamic_connections_enabled` + fixed servers; scoped call adds dynamic servers |
 
 Relevant code: `src/client.ts`, `src/connection-resolver.ts`, `src/guards.ts`, `src/tools/openfga.ts`, `src/resource-resolver.ts`, `src/resources/admin.ts`.
 
 ## Goals
 
 1. **Named server registry** — fixed pool at startup plus optional dynamic registries per scope.
-2. **Connection scope** — only for **dynamic** servers; isolates runtime-created connections between concurrent HTTP clients.
+2. **Connection scope** — for **scoped** servers (dynamic `api_url` and fixed auth elicitation); isolates per-agent credential and connection state on HTTP.
 3. **Default server** — omit `server` on tool calls to use the configured default (fixed pool when unscoped).
-4. **Connect / disconnect lifecycle** — MCP tools for **dynamic** servers only; fixed servers are not disconnected at runtime.
+4. **Connect / disconnect lifecycle** — **`connect_server`** for scoped servers (dynamic `api_url` or fixed `connect_required`); **`disconnect_server`** removes scoped entries; fixed direct servers are not disconnected at runtime.
 5. **Startup configuration** — one config shape for stdio and HTTP; secrets in env or config file, not in chat.
 6. **Unified transport** — same tool shapes and resolution logic; transport differs only in dynamic scope policy (stdio: one scope; HTTP: many).
-7. **MCP-aligned state** — explicit handles for dynamic tier only (SEP-2567 direction).
+7. **MCP-aligned state** — explicit `connection_scope` handle for scoped tier (SEP-2567 direction).
 
 ## Non-goals (initial version)
 
@@ -161,9 +164,11 @@ Relevant code: `src/client.ts`, `src/connection-resolver.ts`, `src/guards.ts`, `
 
 | Term | Meaning |
 |------|---------|
-| **Fixed server** | Named FGA backend defined at process startup; shared by all clients; no `connection_scope` |
-| **Dynamic server** | Named FGA backend registered at runtime via `connect_server` within a scope |
-| **Connection scope** | Application session id (UUID) for **dynamic** registries only. Not MCP `Mcp-Session-Id`; not auth `userId`. |
+| **Fixed server** | Named FGA backend defined at process startup in config |
+| **Fixed direct** | Fixed server with config `auth` or open FGA — no `connection_scope` |
+| **Fixed scoped** | Fixed server with `auth_status: connect_required` — creds via `connect_server({ server })` into a scope |
+| **Dynamic server** | Named FGA backend registered via `connect_server({ api_url })` within a scope |
+| **Connection scope** | Application session id (UUID) for **scoped** registries. Not MCP `Mcp-Session-Id`; not auth `userId`. |
 | **Server profile** | Named connection: API URL + auth credentials |
 | **Server reference** | Short name (e.g. `dev`) within fixed or dynamic registry |
 | **Default server** | Reference used when `server` is omitted (within the resolved pool) |
@@ -256,7 +261,7 @@ type FixedServerPool = ServerRegistry;  // loaded at startup, immutable
 type DynamicScopeStore = {
   scopes: Map<string, ServerRegistry & { createdAt: number; lastUsedAt: number }>;
   transport: "stdio" | "http";
-  allowRuntimeConnect: boolean;
+  allowDynamicConnections: boolean;
 };
 
 function resolveClient(
@@ -306,17 +311,22 @@ Fixed servers ignore this table — no scope ever.
 | Scope id format | Real **UUID** | Real **UUID** |
 | Lazy scope create | On first `connect_server` | On first `connect_server` |
 
-Omitting `connection_scope` on admin tools always targets the **fixed** pool. Dynamic tier is opt-in via explicit scope (or stdio single-scope leniency after first `connect_server`).
+Omitting `connection_scope` on admin tools targets **fixed direct** when the server has **no** `auth_status`. Scoped servers require explicit scope on HTTP (stdio single-scope leniency unchanged).
 
 ### When `connection_scope` is minted
 
-Only for the **dynamic** tier:
-
-1. **`connect_server`** without `connection_scope` — mint scope, register server, return `connection_scope`.
+1. **`connect_server`** without `connection_scope` — mint scope (dynamic `api_url` or fixed scoped `server`).
 2. **`connect_server`** with `connection_scope` — add/update server in that scope.
-3. **Not** minted for fixed servers or when `allow_runtime_connect` is false.
+3. **Not** minted for fixed direct tool calls.
 
-Do **not** mint on documentation/prompt tools or on fixed-server tool calls.
+Do **not** mint on documentation/prompt tools.
+
+**Gates:**
+
+| Connect call | Requires |
+|--------------|----------|
+| `connect_server({ api_url })` | `allow_dynamic_connections: true` |
+| `connect_server({ server })` | Fixed entry with `auth_status: connect_required` (HTTP elicitation) |
 
 ### `disconnect_server` (dynamic tier)
 
@@ -331,6 +341,8 @@ Removes one server from a dynamic scope. Requires `connection_scope` and `server
 After the scope is dropped (last disconnect or TTL eviction), the client must call `connect_server` without `connection_scope` to obtain a new scope id.
 
 ### Server profile shape
+
+Optional **`auth`** object on each server — a discriminated union (`method` selects pre-shared vs OIDC). Omit `auth` when credentials should come from URL elicitation on **HTTP transport** (or the FGA server is open). On **stdio**, auth-protected servers need `auth` in config — elicitation is not available. See [OpenFGA auth elicitation](./openfga-auth-elicitation.md#stdio-transport-policy-v1).
 
 ```typescript
 type ServerProfile = {
@@ -354,13 +366,14 @@ type ClientCredentialsAuth = {
   clientId: string;
   clientSecret: string;
   issuer: string;
-  audience: string;
+  audience?: string;
+  scopes?: string;   // optional, space-separated
 };
 ```
 
-Validation (per profile): OAuth requires all four fields; token wins over OAuth if both set. Validate on connect with `listStores({ pageSize: 1 })`.
+JSON config uses snake_case inside `auth` (`token`, `client_id`, `client_secret`, …). Validation: `method` is required; fields must match the variant. Validate configured servers on load with `listStores({ pageSize: 1 })`.
 
-Stored dynamic entries use the same `ServerProfile` shape as fixed servers; `name` is the **assigned** key from `connect_server`, not the caller's `requested_name` when they differ.
+Stored dynamic entries use the same profile shape as fixed servers; `name` is the **assigned** key from `connect_server`, not the caller's `requested_name` when they differ.
 
 ### Configuration
 
@@ -368,7 +381,7 @@ Two **separate** startup concerns — intentionally **not** in the same file:
 
 | Concern | Source | What it controls |
 |---------|--------|------------------|
-| **FGA connections** | `--config <path>` (JSON file) | Fixed `servers`, defaults, restrict, writeable, `allow_runtime_connect` |
+| **FGA connections** | `--config <path>` (JSON file) | Fixed `servers`, defaults, restrict, writeable, `allow_dynamic_connections` |
 | **MCP process runtime** | CLI flags and/or env | stdio vs HTTP, bind host/port, SSE, stateless, debug |
 
 **Why split?**
@@ -387,7 +400,7 @@ Runtime settings use CLI flags with env fallback (`OPENFGA_MCP_TRANSPORT`, …);
 ```json
 {
   "default_server": "dev",
-  "allow_runtime_connect": false,
+  "allow_dynamic_connections": false,
   "dynamic": {
     "scope_idle_ttl_seconds": 86400,
     "max_servers_per_scope": 10,
@@ -406,10 +419,13 @@ Runtime settings use CLI flags with env fallback (`OPENFGA_MCP_TRANSPORT`, …);
     },
     "prod": {
       "api_url": "https://api.us1.fga.dev",
-      "client_id": "...",
-      "client_secret": "...",
-      "issuer": "...",
-      "audience": "...",
+      "auth": {
+        "method": "client_credentials",
+        "issuer": "https://auth.fga.dev",
+        "client_id": "...",
+        "client_secret": "...",
+        "audience": "https://api.us1.fga.dev/"
+      },
       "default_store": "01HPROD...",
       "default_model": "01HPRODMODEL...",
       "restrict": true,
@@ -422,8 +438,8 @@ Runtime settings use CLI flags with env fallback (`OPENFGA_MCP_TRANSPORT`, …);
 | Field | Purpose |
 |-------|---------|
 | `default_server` | Default FGA `server` when omitted on tool calls |
-| `allow_runtime_connect` | Enable dynamic tier (`connect_server`); **default `false`** |
-| `dynamic.*` | Limits and TTL for dynamic scopes (ignored when `allow_runtime_connect` is false) |
+| `allow_dynamic_connections` | Enable dynamic tier (`connect_server`); **default `false`** |
+| `dynamic.*` | Limits and TTL for dynamic scopes (ignored when `allow_dynamic_connections` is false) |
 | `defaults.*` | Global writeable/restrict/store/model defaults |
 | `servers.*` | Fixed FGA server profiles (see earlier tables) |
 
@@ -476,6 +492,7 @@ OPENFGA_MCP_API_URL=http://127.0.0.1:8080 fga-mcp
 | `--port <n>` | `9090` | HTTP port |
 | `--sse` / `--no-sse` | `true` | HTTP SSE |
 | `--stateless` / `--no-stateless` | `false` | HTTP stateless mode |
+| `--public-url <origin>` | — | Browser-reachable origin for auth elicitation URLs ([auth elicitation spec](./openfga-auth-elicitation.md#public-url-for-elicitation-links)) |
 | `--debug` / `--no-debug` | `true` | Debug logging |
 
 **Runtime env vars** (same settings; used when CLI flags are not passed):
@@ -487,6 +504,7 @@ OPENFGA_MCP_API_URL=http://127.0.0.1:8080 fga-mcp
 | `OPENFGA_MCP_TRANSPORT_PORT` | `--port` |
 | `OPENFGA_MCP_TRANSPORT_SSE` | `--sse` |
 | `OPENFGA_MCP_TRANSPORT_STATELESS` | `--stateless` |
+| `OPENFGA_MCP_PUBLIC_URL` | `--public-url` |
 | `OPENFGA_MCP_DEBUG` | `--debug` |
 
 #### Precedence
@@ -553,9 +571,11 @@ Secrets: v1 uses env vars or literals in the FGA config file. In-file `token_env
 
 If no FGA config file and no structured `servers` block, treat legacy `OPENFGA_MCP_API_URL` (+ auth env vars) as a single fixed server named `default`. Transport continues to work via env until CLI is implemented.
 
-#### Runtime connect (dynamic tier)
+#### Dynamic connections (formerly “runtime connect”)
 
-`connect_server` registers into a dynamic scope only. Gated by `allow_runtime_connect` in the FGA config file.
+`connect_server({ api_url })` registers into a scope only when **`allow_dynamic_connections: true`**. Distinct from **`connect_server({ server })`** for fixed auth elicitation — see [auth elicitation spec](./openfga-auth-elicitation.md#connect_server-target-behavior).
+
+Deprecated config alias: **`allow_runtime_connect`** accepted as synonym for **`allow_dynamic_connections`** during migration.
 
 See [`connect_server`](#connect_server-dynamic-tier) below for input/output and **server name assignment** rules.
 
@@ -563,27 +583,23 @@ See [`connect_server`](#connect_server-dynamic-tier) below for input/output and 
 
 | Tool | Purpose |
 |------|---------|
-| `connect_server` | **Dynamic only.** Mint or extend a scope; connect an FGA backend; return `connection_scope` and the **assigned** `server` name |
-| `disconnect_server` | **Dynamic only.** Remove a server from a scope; **drop scope when last server removed** |
-| `list_servers` | Always returns `runtime_connect_enabled` + fixed servers. With `connection_scope`: also dynamic servers in that scope (fixed entries always included) |
-| `set_default_server` | Set default within fixed pool (no scope) or dynamic pool (with scope) |
+| `connect_server` | Mint or extend a scope. **`api_url`** (dynamic, requires `allow_dynamic_connections`) or **`server`** (fixed scoped auth). Returns `connection_scope` and `server` |
+| `disconnect_server` | Remove a scoped server; **drop scope when last server removed** |
+| `list_servers` | `dynamic_connections_enabled` + fixed entries with `auth_status`. With `connection_scope`: scoped servers too |
+| `set_default_server` | Set default within fixed direct pool (no scope) or within a scope |
 
-### `connect_server` (dynamic tier)
+### `connect_server`
 
-The caller supplies connection details (`api_url`, auth, optional policy pins). The **server assigns** the registry key returned as `server` in the response. Agents must use that assigned name (and `connection_scope`) on all subsequent tool calls — same pattern as minting `connection_scope` itself.
+The caller supplies either **`api_url`** (dynamic) or **`server`** (fixed scoped auth) — mutually exclusive. Dynamic mode assigns the registry key; fixed scoped mode uses the config server name. Agents must use returned `connection_scope` and `server` on scoped FGA tools.
 
 #### Input
 
 ```typescript
 type ConnectServerInput = {
   connection_scope?: string;   // omit on first connect → mint new scope
-  requested_name?: string;     // optional hint; not guaranteed (see assignment rules)
-  api_url: string;
-  api_token?: string;
-  client_id?: string;
-  client_secret?: string;
-  issuer?: string;
-  audience?: string;
+  api_url?: string;            // dynamic mode — requires allow_dynamic_connections
+  server?: string;             // fixed scoped mode — config name when auth_status connect_required
+  requested_name?: string;     // dynamic mode only — optional hint
   label?: string;
   default_store?: string;
   default_model?: string;
@@ -592,9 +608,7 @@ type ConnectServerInput = {
 };
 ```
 
-`requested_name` is a **hint**, not the registry key. The tool always returns the **assigned** name in `server`.
-
-#### Server name assignment
+#### Dynamic tier (api_url)
 
 Names are unique **within a dynamic scope** (fixed and dynamic registries remain separate namespaces).
 
@@ -609,7 +623,16 @@ Names are unique **within a dynamic scope** (fixed and dynamic registries remain
 
 Auto-generated names must be **human-readable** (host-derived or monotonic `server-1`, `server-2` within the scope) — not random UUIDs. UUIDs are reserved for `connection_scope`.
 
-**First server in a new scope** becomes the scope's default server (same as fixed pool behavior when only one server exists). Additional connects do not change the default unless `set_default_server` is called.
+**First server in a new scope** becomes the scope's default server. Additional connects do not change the default unless `set_default_server` is called.
+
+#### Fixed scoped tier (server)
+
+When **`list_servers`** reports **`auth_status: connect_required`** for a fixed entry:
+
+- Call **`connect_server({ server: "prod" })`** — allowed even when **`allow_dynamic_connections: false`**.
+- Profile (`api_url`, `writeable`, `restrict`, defaults) copied from fixed config; **`auth`** from elicitation (see auth spec).
+- Response **`server`** is the config name (no renaming). Entry stored with **`fixed: true`** in scope.
+- On HTTP, all subsequent FGA tools require **`connection_scope` + `server`**.
 
 #### Output
 
@@ -664,23 +687,46 @@ Validation (per profile): OAuth requires all four fields; token wins over OAuth 
 
 ```json
 {
-  "runtime_connect_enabled": true,
+  "dynamic_connections_enabled": true,
   "servers": [
-    { "name": "dev", "api_url": "http://127.0.0.1:8080", "default": true, "fixed": true },
-    { "name": "prod", "api_url": "https://api.us1.fga.dev", "default": false, "fixed": true }
+    {
+      "name": "dev",
+      "api_url": "http://127.0.0.1:8080",
+      "default": true,
+      "fixed": true
+    },
+    {
+      "name": "prod",
+      "api_url": "https://api.us1.fga.dev",
+      "auth_status": "connect_required",
+      "default": false,
+      "fixed": true
+    }
   ]
 }
 ```
 
-**`list_servers` — with scope (fixed + dynamic):**
+**`list_servers` — with scope (fixed scoped + dynamic):**
 
 ```json
 {
-  "runtime_connect_enabled": true,
+  "dynamic_connections_enabled": true,
   "connection_scope": "550e8400-e29b-41d4-a716-446655440000",
   "servers": [
-    { "name": "dev", "api_url": "http://127.0.0.1:8080", "default": true, "fixed": true },
-    { "name": "staging", "api_url": "http://staging:8080", "default": true, "fixed": false }
+    {
+      "name": "prod",
+      "api_url": "https://api.us1.fga.dev",
+      "connected": true,
+      "default": true,
+      "fixed": true
+    },
+    {
+      "name": "staging",
+      "api_url": "http://staging:8080",
+      "connected": true,
+      "default": false,
+      "fixed": false
+    }
   ]
 }
 ```
@@ -716,11 +762,11 @@ MCP does not require one global URI scheme. This server **registers different Op
 |------------|---------------------|---------|
 | Single fixed server, no runtime connect | **Legacy** — `server` implicit | `openfga://store/{storeId}/model/{modelId}` |
 | Multiple fixed servers | **Server-prefixed** | `openfga://server/{server}/store/{storeId}/model/{modelId}` |
-| Fixed + dynamic (`allow_runtime_connect`) | **Two families** — fixed reads without scope; dynamic reads with scope | Fixed: `openfga://server/{server}/store/...` · Dynamic: `openfga://scope/{connectionScope}/server/{server}/store/...` |
+| Fixed + dynamic (`allow_dynamic_connections`) | **Two families** — fixed reads without scope; dynamic reads with scope | Fixed: `openfga://server/{server}/store/...` · Dynamic: `openfga://scope/{connectionScope}/server/{server}/store/...` |
 
 Registration rules:
 
-- Register **legacy** URIs only when exactly **one** fixed server exists and `allow_runtime_connect` is false. Omitted `server` in the path resolves that sole backend.
+- Register **legacy** URIs only when exactly **one** fixed server exists and `allow_dynamic_connections` is false. Omitted `server` in the path resolves that sole backend.
 - Do **not** register legacy `openfga://store/{storeId}/...` when multiple fixed servers are configured — the backend is ambiguous.
 - When both fixed and dynamic tiers are enabled, register **both** template families. Omitting `scope` in the URI always targets the **fixed** pool (mirrors tool resolution).
 - Check/expand-style templates keep query parameters for tuple fields as today; path segments identify pool, server, and store.
@@ -865,7 +911,7 @@ Future HTTP work uses the same `ConnectionScopeStore` as stdio. Request handling
 - Enforce `dynamic.max_servers_per_scope` and `dynamic.max_scopes` when configured (non-`null`).
 - Evict idle scopes via `dynamic.scope_idle_ttl_seconds` on HTTP when configured (non-`null`).
 - Per-scope limits bound resource leaks per session; global scope limits bound process memory. Neither prevents abuse across many minted scopes — use HTTP auth and rate limits at the edge.
-- Prefer env bootstrap over runtime connect in production (`allow_runtime_connect: false`).
+- Prefer env bootstrap over runtime connect in production (`allow_dynamic_connections: false`).
 - `list_servers` returns URLs and names only.
 
 ### Error messages
@@ -939,12 +985,12 @@ Defer until HTTP multi-tenant or runtime connect is needed. Internal types shoul
 - [x] Server name assignment: suffix on collision (`dev-1`), host-derived fallback when omitted, upsert by `api_url` within scope
 - [x] `disconnect_server`: last server in scope drops scope; next connect mints new scope
 - [x] FGA config `dynamic.*`: `scope_idle_ttl_seconds`, `max_servers_per_scope`, `max_scopes` (defaults + `null` to disable)
-- [x] `list_servers` with `connection_scope` (includes dynamic servers; always returns `runtime_connect_enabled` + fixed)
-- [x] `list_servers` returns `runtime_connect_enabled` for connect_server discovery
+- [x] `list_servers` with `connection_scope` (includes dynamic servers; always returns `dynamic_connections_enabled` + fixed)
+- [x] `list_servers` returns `dynamic_connections_enabled` for connect_server discovery
 - [x] Optional `connection_scope` on admin tools
 - [x] HTTP: scope required for dynamic tier; idle TTL eviction
 - [x] Stdio: at most one dynamic scope; scope optional when sole scope exists; cleanup on process exit
-- [x] `allow_runtime_connect` config gate (default `false`)
+- [x] `allow_dynamic_connections` config gate (default `false`; accepts deprecated `allow_runtime_connect`)
 - [x] Unit + integration tests: scope minting, TTL, last-disconnect drop, caps, name assignment, upsert, isolation
 
 ### Release D — Polish
@@ -954,7 +1000,7 @@ Defer until HTTP multi-tenant or runtime connect is needed. Internal types shoul
 - [x] Config-conditional resource registration:
   - [x] Legacy URIs when single fixed server, no runtime connect
   - [x] Server-prefixed URIs when multiple fixed servers
-  - [x] Scope-prefixed URIs for dynamic-tier reads when `allow_runtime_connect`
+  - [x] Scope-prefixed URIs for dynamic-tier reads when `allow_dynamic_connections`
   - [x] Both fixed and scope-prefixed families when fixed + dynamic coexist
 - [x] Resource read handlers via resolved target (not default client only)
 - [x] Unit tests: URI normalization, registration matrix per config, resolution parity with tools
@@ -1016,7 +1062,7 @@ Each item has an explicit status: **Decided** (spec is closed), **Deferred** (ou
 
 **Decided (config delivery):** FGA config file via `--config <path>`. Fallback: `OPENFGA_MCP_CONFIG` env var as a **file path** or **inline JSON** when CLI args are unavailable (implemented).
 
-**Pending (secret indirection):** Syntax for secret references in FGA config JSON (e.g. `token_env: "OPENFGA_MCP_API_TOKEN"`) is **not decided**. v1 uses literal secrets in the config file or env vars on the server profile (`api_token`, `client_id`, etc.). Define `token_env` shape before implementing in-file secret indirection (tracked under [Deferred](#deferred-not-in-v1)).
+**Pending (secret indirection):** Syntax for secret references in FGA config JSON (e.g. `token_env: "OPENFGA_MCP_API_TOKEN"`) is **not decided**. v1 uses literal secrets in the config file `auth` object or env vars for legacy bootstrap. Define `token_env` shape before implementing in-file secret indirection (tracked under [Deferred](#deferred-not-in-v1)).
 
 ### 5. Legacy profile name
 
@@ -1059,7 +1105,7 @@ Each item has an explicit status: **Decided** (spec is closed), **Deferred** (ou
 
 ### 12. Published npm / MCP instructions
 
-**Done.** README covers operator setup; MCP `instructions` and tool/param descriptions cover discovery (`list_servers`, `runtime_connect_enabled`), routing (`connection_scope`, `server`), resource URI tiers, and policy (`writeable`, `restrict`).
+**Done.** README covers operator setup; MCP `instructions` and tool/param descriptions cover discovery (`list_servers`, `dynamic_connections_enabled`, `auth_status`), routing (`connection_scope`, `server`), resource URI tiers, and policy (`writeable`, `restrict`).
 
 ---
 

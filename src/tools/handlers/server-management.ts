@@ -1,5 +1,5 @@
 import { checkOfflineMode } from "../../guards.js";
-import { isRuntimeConnectEnabled, requireDynamicStore } from "../../connection-resolver.js";
+import { isDynamicConnectionsEnabled, requireDynamicStore } from "../../connection-resolver.js";
 import { requirePool, type ServerContext } from "../../client.js";
 import { listFixedServers, setDefaultServer as setFixedDefaultServer } from "../../server-pool.js";
 import type { ConnectServerInput } from "../../dynamic-scope-store.js";
@@ -13,7 +13,7 @@ function listServersOfflineGuard(ctx: ServerContext): string | null {
     return checkOfflineMode(ctx, "Listing FGA servers");
   }
   const hasFixed = (ctx.pool?.servers.size ?? 0) > 0;
-  if (hasFixed || isRuntimeConnectEnabled(ctx)) return null;
+  if (hasFixed || isDynamicConnectionsEnabled(ctx)) return null;
   return checkOfflineMode(ctx, "Listing FGA servers");
 }
 
@@ -29,18 +29,18 @@ export async function listServers(
   const offline = listServersOfflineGuard(ctx);
   if (offline) return offline;
 
-  const runtimeConnectEnabled = isRuntimeConnectEnabled(ctx);
+  const dynamicConnectionsEnabled = isDynamicConnectionsEnabled(ctx);
   const fixedServers = listFixedServersOrEmpty(ctx);
   const response: Record<string, unknown> = {
-    runtime_connect_enabled: runtimeConnectEnabled,
+    dynamic_connections_enabled: dynamicConnectionsEnabled,
     servers: fixedServers,
   };
 
   const scope = connectionScope?.trim();
   if (!scope) return response;
 
-  if (!runtimeConnectEnabled) {
-    return "❌ Runtime connect is disabled. Use fixed servers or set allow_runtime_connect: true in FGA config.";
+  if (!dynamicConnectionsEnabled) {
+    return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
   }
 
   try {
@@ -60,8 +60,8 @@ export async function setDefaultServerTool(
 ): Promise<string> {
   const scope = connectionScope?.trim();
   if (scope) {
-    if (!isRuntimeConnectEnabled(ctx)) {
-      return "❌ Runtime connect is disabled. Use fixed servers or set allow_runtime_connect: true in FGA config.";
+    if (!isDynamicConnectionsEnabled(ctx)) {
+      return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
     }
     try {
       requireDynamicStore(ctx).setDefaultServer(scope, server);
@@ -92,6 +92,7 @@ export type ConnectServerToolInput = {
   client_secret?: string;
   issuer?: string;
   audience?: string;
+  scopes?: string;
   label?: string;
   default_store?: string;
   default_model?: string;
@@ -103,8 +104,8 @@ export async function connectServer(
   ctx: ServerContext,
   input: ConnectServerToolInput,
 ): Promise<string | Record<string, unknown>> {
-  if (!isRuntimeConnectEnabled(ctx)) {
-    return "❌ Runtime connect is disabled. Use fixed servers or set allow_runtime_connect: true in FGA config.";
+  if (!isDynamicConnectionsEnabled(ctx)) {
+    return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
   }
 
   if (!input.api_url?.trim()) {
@@ -120,6 +121,7 @@ export async function connectServer(
     clientSecret: input.client_secret,
     issuer: input.issuer,
     audience: input.audience,
+    scopes: input.scopes,
     label: input.label,
     defaultStore: input.default_store,
     defaultModel: input.default_model,
@@ -150,8 +152,8 @@ export async function disconnectServer(
   connectionScope: string,
   server: string,
 ): Promise<string> {
-  if (!isRuntimeConnectEnabled(ctx)) {
-    return "❌ Runtime connect is disabled. Use fixed servers or set allow_runtime_connect: true in FGA config.";
+  if (!isDynamicConnectionsEnabled(ctx)) {
+    return "❌ Dynamic connections are disabled. Set allow_dynamic_connections: true in FGA config to connect arbitrary api_url backends.";
   }
 
   if (!connectionScope?.trim()) {

@@ -53,14 +53,14 @@ export function createMultiServerContext(
 export function createDynamicContext(
   options: {
     transport?: "stdio" | "http";
-    allowRuntimeConnect?: boolean;
+    allowDynamicConnect?: boolean;
     globalDefaults?: FgaDefaultsConfig;
     dynamicConfig?: { scope_idle_ttl_seconds?: number | null; max_servers_per_scope?: number | null; max_scopes?: number | null };
     fixedClients?: Record<string, Partial<OpenFgaClient>>;
   } = {},
 ): ServerContext {
   const transport = options.transport ?? "stdio";
-  const allowRuntimeConnect = options.allowRuntimeConnect ?? true;
+  const allowDynamicConnect = options.allowDynamicConnect ?? true;
   const globalDefaults = options.globalDefaults ?? {};
   const pool =
     options.fixedClients && Object.keys(options.fixedClients).length > 0
@@ -69,7 +69,7 @@ export function createDynamicContext(
 
   return {
     pool,
-    dynamicStore: allowRuntimeConnect
+    dynamicStore: allowDynamicConnect
       ? new DynamicScopeStore({
           transport,
           globalDefaults,
@@ -83,7 +83,7 @@ export function createDynamicContext(
     transport,
     offline: false,
     fgaConfig: {
-      allow_runtime_connect: allowRuntimeConnect,
+      allow_dynamic_connections: allowDynamicConnect,
       defaults: globalDefaults,
       dynamic: options.dynamicConfig,
       servers: pool

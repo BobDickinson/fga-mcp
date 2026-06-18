@@ -8,13 +8,25 @@ export type FgaDefaultsConfig = {
   default_model?: string;
 };
 
+export type ApiTokenAuth = {
+  method: "api_token";
+  token: string;
+};
+
+export type ClientCredentialsAuth = {
+  method: "client_credentials";
+  client_id: string;
+  client_secret: string;
+  issuer: string;
+  audience?: string;
+  scopes?: string;
+};
+
+export type ServerAuth = ApiTokenAuth | ClientCredentialsAuth;
+
 export type FgaServerConfig = {
   api_url: string;
-  api_token?: string;
-  client_id?: string;
-  client_secret?: string;
-  issuer?: string;
-  audience?: string;
+  auth?: ServerAuth;
   label?: string;
   default_store?: string;
   default_model?: string;
@@ -30,7 +42,8 @@ export type FgaDynamicConfig = {
 
 export type FgaConfigDocument = {
   default_server?: string;
-  allow_runtime_connect?: boolean;
+  /** When true, connect_server may register arbitrary api_url backends (dynamic tier). */
+  allow_dynamic_connections?: boolean;
   dynamic?: FgaDynamicConfig;
   defaults?: FgaDefaultsConfig;
   servers?: Record<string, FgaServerConfig>;
@@ -40,8 +53,131 @@ export type FgaConfigLoadResult =
   | { ok: true; config: FgaConfigDocument; source: "file" | "legacy-env" }
   | { ok: false; errors: string[] };
 
+const FLAT_CREDENTIAL_FIELDS = [
+  "api_token",
+  "client_id",
+  "client_secret",
+  "issuer",
+  "audience",
+  "scopes",
+] as const;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function readOptionalString(
+  obj: Record<string, unknown>,
+  key: string,
+  prefix: string,
+  errors: string[],
+): string | undefined {
+  const field = obj[key];
+  if (field === undefined) return undefined;
+  if (typeof field !== "string") {
+    errors.push(`${prefix}.${key} must be a string`);
+    return undefined;
+  }
+  return field;
+}
+
+function readRequiredString(
+  obj: Record<string, unknown>,
+  key: string,
+  prefix: string,
+  errors: string[],
+): string | undefined {
+  const field = readOptionalString(obj, key, prefix, errors);
+  if (field === undefined) {
+    errors.push(`${prefix}.${key} is required`);
+    return undefined;
+  }
+  if (field.trim() === "") {
+    errors.push(`${prefix}.${key} must be a non-empty string`);
+    return undefined;
+  }
+  return field;
+}
+
+export function readServerAuth(name: string, value: unknown, errors: string[]): ServerAuth | undefined {
+  if (value === undefined) return undefined;
+
+  const prefix = `servers.${name}.auth`;
+  if (!isRecord(value)) {
+    errors.push(`${prefix} must be an object`);
+    return undefined;
+  }
+
+  const method = value.method;
+  if (typeof method !== "string") {
+    errors.push(`${prefix}.method is required`);
+    return undefined;
+  }
+
+  if (method === "api_token") {
+    const token = readRequiredString(value, "token", prefix, errors);
+    if (token === undefined) return undefined;
+    return { method: "api_token", token };
+  }
+
+  if (method === "client_credentials") {
+    const clientId = readRequiredString(value, "client_id", prefix, errors);
+    const clientSecret = readRequiredString(value, "client_secret", prefix, errors);
+    const issuer = readRequiredString(value, "issuer", prefix, errors);
+    if (clientId === undefined || clientSecret === undefined || issuer === undefined) {
+      return undefined;
+    }
+
+    const auth: ClientCredentialsAuth = {
+      method: "client_credentials",
+      client_id: clientId,
+      client_secret: clientSecret,
+      issuer,
+    };
+
+    const audience = readOptionalString(value, "audience", prefix, errors);
+    const scopes = readOptionalString(value, "scopes", prefix, errors);
+    if (audience !== undefined) auth.audience = audience;
+    if (scopes !== undefined) auth.scopes = scopes;
+
+    return auth;
+  }
+
+  errors.push(`${prefix}.method must be "api_token" or "client_credentials"`);
+  return undefined;
+}
+
+export function buildServerAuth(input: {
+  apiToken?: string;
+  clientId?: string;
+  clientSecret?: string;
+  issuer?: string;
+  audience?: string;
+  scopes?: string;
+}): ServerAuth | undefined {
+  const token = input.apiToken?.trim() ?? "";
+  const clientId = input.clientId?.trim() ?? "";
+
+  if (token !== "" && clientId !== "") {
+    throw new Error("Provide either api_token or client credentials, not both.");
+  }
+
+  if (token !== "") {
+    return { method: "api_token", token };
+  }
+
+  if (clientId !== "") {
+    return {
+      method: "client_credentials",
+      client_id: clientId,
+      client_secret: input.clientSecret?.trim() ?? "",
+      issuer: input.issuer?.trim() ?? "",
+      ...(input.audience?.trim() ? { audience: input.audience.trim() } : {}),
+      ...(input.scopes?.trim() ? { scopes: input.scopes.trim() } : {}),
+    };
+  }
+
+  return undefined;
 }
 
 function readServerConfig(name: string, value: unknown, errors: string[]): FgaServerConfig | null {
@@ -56,18 +192,27 @@ function readServerConfig(name: string, value: unknown, errors: string[]): FgaSe
     return null;
   }
 
+  const flatPresent = FLAT_CREDENTIAL_FIELDS.some((key) => value[key] !== undefined);
+  if (flatPresent && value.auth !== undefined) {
+    errors.push(
+      `servers.${name}: credential fields must be nested under auth, not set at the top level together with auth`,
+    );
+    return null;
+  }
+
+  if (flatPresent) {
+    errors.push(
+      `servers.${name}: credential fields must be nested under auth (e.g. auth: { "method": "api_token", "token": "..." })`,
+    );
+    return null;
+  }
+
   const server: FgaServerConfig = { api_url: apiUrl.trim() };
 
-  for (const key of [
-    "api_token",
-    "client_id",
-    "client_secret",
-    "issuer",
-    "audience",
-    "label",
-    "default_store",
-    "default_model",
-  ] as const) {
+  const auth = readServerAuth(name, value.auth, errors);
+  if (auth) server.auth = auth;
+
+  for (const key of ["label", "default_store", "default_model"] as const) {
     const field = value[key];
     if (field !== undefined) {
       if (typeof field !== "string") {
@@ -129,12 +274,16 @@ export function parseFgaConfigDocument(raw: unknown): FgaConfigLoadResult {
     }
   }
 
-  if (raw.allow_runtime_connect !== undefined) {
-    if (typeof raw.allow_runtime_connect !== "boolean") {
-      errors.push("allow_runtime_connect must be a boolean");
+  const allowDynamicRaw = raw.allow_dynamic_connections ?? raw.allow_runtime_connect;
+  if (allowDynamicRaw !== undefined) {
+    if (typeof allowDynamicRaw !== "boolean") {
+      errors.push("allow_dynamic_connections must be a boolean");
     } else {
-      config.allow_runtime_connect = raw.allow_runtime_connect;
+      config.allow_dynamic_connections = allowDynamicRaw;
     }
+  }
+  if (raw.allow_runtime_connect !== undefined && raw.allow_dynamic_connections === undefined) {
+    // Deprecated alias — allow_runtime_connect still accepted for migration
   }
 
   if (raw.dynamic !== undefined) {
@@ -235,13 +384,14 @@ export function loadLegacyEnvFgaConfig(): FgaConfigLoadResult {
     api_url: apiUrl !== "" ? apiUrl : "http://127.0.0.1:8080",
   };
 
-  if (token !== "") server.api_token = token;
-  if (clientId !== "") {
-    server.client_id = clientId;
-    server.client_secret = clientSecret;
-    server.issuer = issuer;
-    server.audience = audience;
-  }
+  const auth = buildServerAuth({
+    apiToken: token !== "" ? token : undefined,
+    clientId: clientId !== "" ? clientId : undefined,
+    clientSecret: clientSecret !== "" ? clientSecret : undefined,
+    issuer: issuer !== "" ? issuer : undefined,
+    audience: audience !== "" ? audience : undefined,
+  });
+  if (auth) server.auth = auth;
 
   const defaults: FgaDefaultsConfig = {};
   const writeable = getConfiguredString("OPENFGA_MCP_API_WRITEABLE", "");

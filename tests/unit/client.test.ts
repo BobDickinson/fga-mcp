@@ -62,7 +62,7 @@ describe("createServerContext", () => {
     setEnv(
       "OPENFGA_MCP_CONFIG",
       JSON.stringify({
-        allow_runtime_connect: true,
+        allow_dynamic_connections: true,
         dynamic: { max_scopes: 5 },
       }),
     );

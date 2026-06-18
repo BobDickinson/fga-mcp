@@ -8,13 +8,13 @@ import * as modelHandlers from "./handlers/model.js";
 import * as serverHandlers from "./handlers/server-management.js";
 
 const ROUTING_HINT =
-  " Targets fixed servers when connection_scope is omitted; pass connection_scope and server (from connect_server) for dynamic servers.";
+  " Omit connection_scope for fixed servers unless list_servers shows auth_status connect_required. When connect_required, or for dynamic servers, call connect_server first and pass connection_scope on every FGA tool.";
 
 const connectionScopeParam = z
   .string()
   .optional()
   .describe(
-    "Dynamic-tier session UUID returned by connect_server. Omit for fixed servers (startup config). Required on HTTP for dynamic-tier calls; on stdio optional when exactly one dynamic scope exists. Not used for documentation tools or verify_model.",
+    "Application session UUID returned by connect_server. Required on HTTP for scoped servers. Omit for fixed direct servers (no auth_status connect_required on list_servers). Not used for documentation tools or verify_model.",
   );
 
 const connectionScopeForListParam = connectionScopeParam.describe(
@@ -59,7 +59,7 @@ export function registerServerManagementTools(server: FastMCP, ctx: ServerContex
   server.addTool({
     name: "list_servers",
     description:
-      "Discover FGA backends. Call this first. Returns runtime_connect_enabled and fixed servers (fixed: true). If runtime_connect_enabled is false, do not call connect_server. Each server entry includes writeable and restrict. Pass connection_scope to also include dynamic servers for that scope (fixed: false) in the same servers list.",
+      "Discover FGA backends. Call this first. Returns dynamic_connections_enabled and fixed servers (fixed: true). auth_status connect_required appears only when connect_server({ server }) is needed; omit connection_scope for other fixed servers. With connection_scope, lists scoped entries and connected status.",
     parameters: z.object({
       connection_scope: connectionScopeForListParam,
     }),
@@ -85,7 +85,7 @@ export function registerServerManagementTools(server: FastMCP, ctx: ServerContex
   server.addTool({
     name: "connect_server",
     description:
-      "Register an OpenFGA backend at runtime (dynamic tier). Only when list_servers reports runtime_connect_enabled: true. First call without connection_scope mints a new scope. Returns connection_scope, assigned server, renamed, and connected. Reconnecting the same api_url within a scope upserts (same assigned name). Use returned connection_scope and server on subsequent admin and relationship tools. Inherits global defaults unless overridden on this call.",
+      "Connect to an FGA backend and obtain connection_scope. Two modes: (1) Fixed auth — pass server (config name) when list_servers reports auth_status connect_required; allowed regardless of dynamic_connections_enabled. (2) Dynamic — pass api_url when dynamic_connections_enabled is true. First call without connection_scope mints a scope. Returns connection_scope and server; pass both on subsequent admin and relationship tools. Reconnecting same target within a scope upserts credentials.",
     parameters: z.object({
       connection_scope: connectionScopeConnectParam,
       requested_name: z
@@ -103,6 +103,10 @@ export function registerServerManagementTools(server: FastMCP, ctx: ServerContex
       client_secret: z.string().optional().describe("OAuth client secret."),
       issuer: z.string().optional().describe("OAuth token issuer URL."),
       audience: z.string().optional().describe("OAuth API audience."),
+      scopes: z
+        .string()
+        .optional()
+        .describe("Optional space-separated OAuth scopes for client credentials."),
       label: z.string().optional().describe("Optional display label for this connection."),
       default_store: z
         .string()
@@ -185,7 +189,7 @@ export function registerStoreTools(server: FastMCP, ctx: ServerContext): void {
 
   server.addTool({
     name: "list_stores",
-    description: `List OpenFGA stores on a FGA server. Use list_servers first to discover server names and runtime_connect_enabled.${ROUTING_HINT}`,
+    description: `List OpenFGA stores on a FGA server. Use list_servers first for auth_status and dynamic_connections_enabled.${ROUTING_HINT}`,
     parameters: z.object({ ...routingParams }),
     execute: withToolLogging("list_stores", async ({ server, connection_scope }) => {
       const result = await storeHandlers.listStores(ctx, server, connection_scope);

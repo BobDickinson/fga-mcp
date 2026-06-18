@@ -2,7 +2,7 @@ import type { OpenFgaClient as OpenFgaClientType } from "@openfga/sdk";
 import { isContextOffline, type ServerContext } from "./client.js";
 import { resolveConnection, type ResolvedConnection } from "./connection-resolver.js";
 import { checkRestrictedModeResource } from "./guards.js";
-import { isRuntimeConnectEnabled } from "./connection-resolver.js";
+import { isDynamicConnectionsEnabled } from "./connection-resolver.js";
 import type { ServerPolicy } from "./server-pool.js";
 
 export type ResourceRegistrationPlan = {
@@ -26,12 +26,12 @@ export type ResourceTarget = ResolvedConnection & {
 
 export function getResourceRegistrationPlan(ctx: ServerContext): ResourceRegistrationPlan {
   const fixedCount = ctx.pool?.servers.size ?? 0;
-  const runtimeConnect = isRuntimeConnectEnabled(ctx);
+  const dynamicConnections = isDynamicConnectionsEnabled(ctx);
 
   return {
-    legacyFixed: fixedCount === 1 && !runtimeConnect,
-    fixedServerPrefixed: fixedCount > 1 || (fixedCount >= 1 && runtimeConnect),
-    dynamicScopePrefixed: runtimeConnect,
+    legacyFixed: fixedCount === 1 && !dynamicConnections,
+    fixedServerPrefixed: fixedCount > 1 || (fixedCount >= 1 && dynamicConnections),
+    dynamicScopePrefixed: dynamicConnections,
   };
 }
 

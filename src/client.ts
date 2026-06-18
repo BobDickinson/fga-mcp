@@ -32,9 +32,9 @@ export async function createServerContext(
 
   const { config } = loaded;
   const hasFixedServers = Object.keys(config.servers ?? {}).length > 0;
-  const allowRuntimeConnect = config.allow_runtime_connect ?? false;
+  const allowDynamicConnections = config.allow_dynamic_connections ?? false;
 
-  if (!hasFixedServers && !allowRuntimeConnect) {
+  if (!hasFixedServers && !allowDynamicConnections) {
     logInfo("Starting OpenFGA MCP Server in OFFLINE MODE");
     logInfo("Available features: Planning (Prompts) and Coding assistance");
     logInfo("To enable administrative features, configure OPENFGA_MCP servers or OPENFGA_MCP_API_URL\n");
@@ -48,7 +48,7 @@ export async function createServerContext(
   }
 
   const pool = hasFixedServers ? await createFixedServerPool(config) : null;
-  const dynamicStore = allowRuntimeConnect
+  const dynamicStore = allowDynamicConnections
     ? new DynamicScopeStore({
         transport: runtime.transport,
         globalDefaults: config.defaults ?? {},
@@ -65,8 +65,8 @@ export async function createServerContext(
       logInfo(`Default fixed server: ${pool.defaultServer}`);
     }
   }
-  if (allowRuntimeConnect) {
-    logInfo(`Runtime connect enabled (${runtime.transport} transport)`);
+  if (allowDynamicConnections) {
+    logInfo(`Dynamic connections enabled (${runtime.transport} transport)`);
   }
   logInfo("All features enabled: Planning, Coding, and Administrative\n");
 

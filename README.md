@@ -29,7 +29,7 @@ Fixed servers are the default production pattern: credentials and policy live in
 
 ### Online — dynamic servers (optional)
 
-When `allow_runtime_connect: true` in the FGA config, agents can also call **`connect_server`** to attach additional OpenFGA servers at runtime. Each connect mints a **`connection_scope`** (UUID); subsequent tool calls pass that scope plus the assigned `server` name. Scopes are isolated per client session and evicted on idle timeout (HTTP) or process exit (stdio).
+When `allow_dynamic_connections: true` in the FGA config, agents can call **`connect_server({ api_url })`** to attach additional OpenFGA backends (dynamic tier). **`connect_server({ server })`** for fixed servers with `auth_status: connect_required` is separate — it does not require `allow_dynamic_connections`. Each connect mints or extends a **`connection_scope`** (UUID); subsequent scoped tool calls pass that scope plus `server`.
 
 Dynamic servers suit local experimentation, ad-hoc OpenFGA servers, or controlled multi-tenant HTTP deployments. Fixed servers remain available alongside dynamic ones — omit `connection_scope` to target the fixed pool.
 
@@ -37,9 +37,10 @@ Dynamic servers suit local experimentation, ad-hoc OpenFGA servers, or controlle
 |------|--------|----------------------------|
 | Offline | None | N/A — docs and local tools only |
 | Fixed | `--config` with `servers.*` | None — use `server` param or default |
-| Dynamic | `--config` with `allow_runtime_connect: true` | `connect_server` → `connection_scope` + `server` |
+| Dynamic (`api_url`) | `--config` with `allow_dynamic_connections: true` | `connect_server({ api_url })` → `connection_scope` + `server` |
+| Fixed auth (HTTP) | Fixed server in config, no `auth`, FGA requires auth | `connect_server({ server })` → `connection_scope` + `server` |
 
-Call **`list_servers`** to discover fixed servers, whether runtime connect is enabled (`runtime_connect_enabled`), and — with `connection_scope` — dynamic servers in that scope.
+Call **`list_servers`** to discover fixed servers (`auth_status: connect_required` when connect is needed; field omitted when fixed direct works), whether dynamic `api_url` connect is enabled (`dynamic_connections_enabled`), and — with `connection_scope` — scoped entries with **`connected`**.
 
 ## Quick start
 
@@ -89,7 +90,10 @@ Example `fga-mcp.json`:
     },
     "prod": {
       "api_url": "https://api.us1.fga.dev",
-      "api_token": "YOUR_TOKEN",
+      "auth": {
+        "method": "api_token",
+        "token": "YOUR_TOKEN"
+      },
       "default_store": "01HABC...",
       "default_model": "01HMODEL...",
       "restrict": true,
@@ -101,9 +105,13 @@ Example `fga-mcp.json`:
 
 Write operations are disabled by default (`writeable: false`). Set `writeable: true` on a server profile or in `defaults` to allow store/model/tuple mutations.
 
+On **stdio**, put OpenFGA credentials in each server’s `auth` block (or use an open FGA server). Browser-based credential elicitation requires **`--transport http`**. On HTTP, omit `connection_scope` for fixed servers unless `list_servers` shows **`auth_status: connect_required`**.
+
 ### 3. HTTP transport
 
 Run fga-mcp as a **standalone HTTP MCP server**, then point any MCP client at its URL. Use the **same `--config` and transport flags** you would pass on the CLI — the FGA config file is shared between stdio and HTTP deployments.
+
+HTTP transport is required for **URL-mode auth elicitation** (runtime credential collection via browser when `auth` is omitted from config). Hosted auth forms are served on the same origin as `/mcp`.
 
 **Start the server:**
 
@@ -127,7 +135,7 @@ The server listens for MCP streamable HTTP at `http://127.0.0.1:9090/mcp` (SSE a
 
 HTTP is useful when the MCP server runs in Docker, on a shared host, or behind your own auth proxy. Put authentication and rate limiting at the HTTP edge; fga-mcp does not replace that layer.
 
-For production HTTP deployments, prefer **fixed servers** in the config file and keep `allow_runtime_connect: false` unless you need runtime connect under controlled conditions. When dynamic tier is enabled over HTTP, **`connection_scope` is required** on dynamic-tier tool calls (stdio may omit it when exactly one dynamic scope exists).
+For production HTTP deployments, prefer **fixed servers with `auth` in config** when possible. Set `allow_dynamic_connections: false` unless agents must register arbitrary `api_url` backends. When using scoped servers (dynamic or fixed `connect_required`), **`connection_scope` is required** on HTTP for all FGA tool calls (stdio may omit it when exactly one scope exists).
 
 ### From npm or source
 
@@ -163,10 +171,10 @@ The FGA config JSON is the primary way to define OpenFGA servers, defaults, and 
 | Field | Default | Purpose |
 |-------|---------|---------|
 | `default_server` | First server / `default` | Default `server` when omitted on tool calls |
-| `allow_runtime_connect` | **`false`** | Enable dynamic tier (`connect_server`); opt-in only |
+| `allow_dynamic_connections` | **`false`** | Enable dynamic tier — `connect_server({ api_url })` for arbitrary backends; opt-in only |
 | `defaults.*` | `writeable: false`, `restrict: false` | Global policy and store/model defaults |
 | `servers.*` | — | Fixed OpenFGA servers loaded at startup |
-| `dynamic.*` | See [Dynamic tier](#dynamic-tier) | Scope TTL and caps (ignored when `allow_runtime_connect` is false) |
+| `dynamic.*` | See [Dynamic tier](#dynamic-tier) | Scope TTL and caps (ignored when `allow_dynamic_connections` is false; fixed `connect_server({ server })` uses the same scope store when auth elicitation is implemented) |
 
 Per-server `default_store` and `default_model` belong on each entry in multi-server setups. Top-level `defaults.default_store` / `default_model` apply to legacy single-server env bootstrap only.
 
@@ -187,7 +195,7 @@ Runtime connect is **disabled by default**. Enable it in the FGA config:
 
 ```json
 {
-  "allow_runtime_connect": true,
+  "allow_dynamic_connections": true,
   "dynamic": {
     "scope_idle_ttl_seconds": 86400,
     "max_servers_per_scope": 10,
@@ -228,7 +236,7 @@ Admin and relationship tools accept optional routing parameters:
 | `store` | Relationship tools | Store ID; falls back to server `default_store` |
 | `model` | Relationship tools | Model ID; falls back to server `default_model` or `"latest"` |
 
-Use **`list_servers`** to see fixed servers and `runtime_connect_enabled`. Pass `connection_scope` to also list dynamic servers for that scope. Use **`set_default_server`** to change the default within the fixed pool or a dynamic scope.
+Use **`list_servers`** to see fixed servers and `dynamic_connections_enabled`. Pass `connection_scope` to also list dynamic servers for that scope. Use **`set_default_server`** to change the default within the fixed pool or a dynamic scope.
 
 When multiple fixed servers exist, admin resource URIs are server-prefixed (`openfga://server/{server}/store/...`). With runtime connect, dynamic reads use scope-prefixed URIs (`openfga://scope/{connectionScope}/server/{server}/store/...`). Tool calls and resource reads share the same resolution rules.
 
@@ -277,9 +285,12 @@ Runtime transport settings use CLI flags first, then env, then defaults:
 | `--port <n>` | `OPENFGA_MCP_TRANSPORT_PORT` | `9090` |
 | `--sse` / `--no-sse` | `OPENFGA_MCP_TRANSPORT_SSE` | `true` |
 | `--stateless` / `--no-stateless` | `OPENFGA_MCP_TRANSPORT_STATELESS` | `false` |
+| `--public-url <origin>` | `OPENFGA_MCP_PUBLIC_URL` | — (see below) |
 | `--debug` / `--no-debug` | `OPENFGA_MCP_DEBUG` | `true` |
 
-FGA connection settings (`servers`, `defaults`, `allow_runtime_connect`, …) belong in the **config file**, not on the CLI. The same config file works for stdio subprocess and HTTP server launch modes.
+FGA connection settings (`servers`, `defaults`, `allow_dynamic_connections`, …) belong in the **config file**, not on the CLI. The same config file works for stdio subprocess and HTTP server launch modes.
+
+`--public-url` is the browser-reachable origin for auth elicitation links (e.g. `https://fga-mcp.example.com`). Omit for local dev — defaults to `http://127.0.0.1:<port>`. Distinct from `--host`, which is the bind address only.
 
 ## Environment variables
 
@@ -294,6 +305,7 @@ Use env vars when an MCP client cannot pass CLI args (e.g. some hosted runners),
 | `OPENFGA_MCP_TRANSPORT_PORT` | `9090` | HTTP port |
 | `OPENFGA_MCP_TRANSPORT_SSE` | `true` | Enable SSE for HTTP transport |
 | `OPENFGA_MCP_TRANSPORT_STATELESS` | `false` | Stateless HTTP sessions |
+| `OPENFGA_MCP_PUBLIC_URL` | | Public origin for auth elicitation URLs (e.g. `https://fga-mcp.example.com`); default `http://127.0.0.1:<port>` |
 | `OPENFGA_MCP_DEBUG` | `true` | Write debug logs to `logs/mcp-debug.log` |
 | `OPENFGA_MCP_CONFIG` | | FGA config file path or inline JSON |
 
@@ -309,11 +321,11 @@ When no config file is loaded, these env vars create one fixed server named `def
 | `OPENFGA_MCP_API_STORE` | | Default/restrict store ID |
 | `OPENFGA_MCP_API_MODEL` | | Default/restrict model ID |
 | `OPENFGA_MCP_API_RESTRICT` | `false` | Lock to configured store/model |
-| `OPENFGA_MCP_API_TOKEN` | | Pre-shared API token |
-| `OPENFGA_MCP_API_CLIENT_ID` | | OAuth client ID |
+| `OPENFGA_MCP_API_TOKEN` | | Pre-shared API token → `auth: { method: "api_token", token: "..." }` |
+| `OPENFGA_MCP_API_CLIENT_ID` | | OAuth client ID → `auth.method: "client_credentials"` |
 | `OPENFGA_MCP_API_CLIENT_SECRET` | | OAuth client secret |
 | `OPENFGA_MCP_API_ISSUER` | | OAuth token issuer |
-| `OPENFGA_MCP_API_AUDIENCE` | | OAuth audience |
+| `OPENFGA_MCP_API_AUDIENCE` | | OAuth audience (optional) |
 
 | Env var | FGA config equivalent |
 |---------|----------------------|

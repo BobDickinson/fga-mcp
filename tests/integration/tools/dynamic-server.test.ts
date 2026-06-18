@@ -82,7 +82,7 @@ describe("Dynamic server integration", () => {
 
     const listed = await serverManagement.listServers(ctx, first.connection_scope);
     expect(listed).toMatchObject({
-      runtime_connect_enabled: true,
+      dynamic_connections_enabled: true,
       connection_scope: first.connection_scope,
       servers: [expect.objectContaining({ name: "dev", fixed: false, default: true })],
     });
@@ -113,7 +113,7 @@ describe("Dynamic server integration", () => {
 
     const unscoped = await serverManagement.listServers(ctx);
     expect(unscoped).toEqual({
-      runtime_connect_enabled: true,
+      dynamic_connections_enabled: true,
       servers: [],
     });
 
@@ -128,19 +128,19 @@ describe("Dynamic server integration", () => {
 
     const result = await serverManagement.listServers(ctx, connected.connection_scope);
     expect(result).toMatchObject({
-      runtime_connect_enabled: true,
+      dynamic_connections_enabled: true,
       connection_scope: connected.connection_scope,
       servers: [expect.objectContaining({ name: "staging", api_url: getTestApiUrl(), fixed: false, default: true })],
     });
   });
 
-  it("returns runtime_connect_enabled on unscoped list_servers", async () => {
+  it("returns dynamic_connections_enabled on unscoped list_servers", async () => {
     const ctx = createIntegrationDynamicContext();
     await connectIntegrationServer(ctx);
 
     const result = await serverManagement.listServers(ctx);
     expect(result).toMatchObject({
-      runtime_connect_enabled: true,
+      dynamic_connections_enabled: true,
       servers: [],
     });
   });

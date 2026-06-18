@@ -99,9 +99,9 @@ export const EXPECTED_PROMPT_NAMES = [
 
 export const SERVER_INSTRUCTIONS = `OpenFGA MCP server for authorization model design, SDK documentation, and store administration.
 
-Discovery: Call list_servers first. It returns runtime_connect_enabled and fixed servers (fixed: true). If runtime_connect_enabled is true, use connect_server to add runtime backends; save connection_scope and assigned server from the response.
+Discovery: Call list_servers first. auth_status connect_required on a fixed server means call connect_server({ server }) and save connection_scope. When dynamic_connections_enabled is true, connect_server({ api_url }) adds arbitrary backends. Pass connection_scope and server on scoped FGA tools.
 
-Routing admin and relationship tools: Omit connection_scope for fixed servers from startup config. For dynamic servers, pass both connection_scope and server (use the assigned name from connect_server, not necessarily requested_name). Omit server to use the default in that pool.
+Routing: Omit connection_scope for fixed servers without auth_status connect_required. Scoped servers require connection_scope on every admin and relationship tool.
 
 Optional: store and model default from server config when omitted. verify_model validates DSL locally and needs no server.
 

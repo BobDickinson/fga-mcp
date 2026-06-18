@@ -20,7 +20,7 @@ describe("MCP server bootstrap", () => {
     expect(server.options.name).toBe(SERVER_NAME);
     expect(server.options.version).toBe(SERVER_VERSION);
     expect(server.options.instructions).toContain("list_servers");
-    expect(server.options.instructions).toContain("runtime_connect_enabled");
+    expect(server.options.instructions).toContain("dynamic_connections_enabled");
   });
 
   it("registers all expected tools", () => {

@@ -3,7 +3,7 @@ import {
   OpenFgaClient,
   type OpenFgaClient as OpenFgaClientType,
 } from "@openfga/sdk";
-import type { FgaConfigDocument, FgaDefaultsConfig, FgaServerConfig } from "./fga-config.js";
+import type { FgaConfigDocument, FgaDefaultsConfig, FgaServerConfig, ServerAuth } from "./fga-config.js";
 
 export type ServerPolicy = {
   defaultStore?: string;
@@ -43,30 +43,41 @@ export function hasActiveFgaConnections(): boolean {
   return activePool !== null && activePool.servers.size > 0;
 }
 
-function buildCredentials(server: FgaServerConfig): ConstructorParameters<typeof OpenFgaClient>[0]["credentials"] {
-  const token = server.api_token ?? "";
-  const clientId = server.client_id ?? "";
+export function buildCredentialsFromAuth(
+  auth?: ServerAuth,
+): ConstructorParameters<typeof OpenFgaClient>[0]["credentials"] {
+  if (!auth) return undefined;
 
-  if (token !== "") {
+  if (auth.method === "api_token") {
     return {
       method: CredentialsMethod.ApiToken,
-      config: { token, headerName: "Authorization", headerValuePrefix: "Bearer" },
+      config: { token: auth.token, headerName: "Authorization", headerValuePrefix: "Bearer" },
     };
   }
 
-  if (clientId !== "") {
-    return {
-      method: CredentialsMethod.ClientCredentials,
-      config: {
-        clientId,
-        clientSecret: server.client_secret ?? "",
-        apiTokenIssuer: server.issuer ?? "",
-        apiAudience: server.audience ?? "",
-      },
-    };
-  }
+  const config: {
+    clientId: string;
+    clientSecret: string;
+    apiTokenIssuer: string;
+    apiAudience: string;
+    scopes?: string[];
+  } = {
+    clientId: auth.client_id,
+    clientSecret: auth.client_secret,
+    apiTokenIssuer: auth.issuer,
+    apiAudience: auth.audience ?? "",
+  };
 
-  return undefined;
+  if (auth.scopes) config.scopes = auth.scopes.split(/\s+/).filter(Boolean);
+
+  return {
+    method: CredentialsMethod.ClientCredentials,
+    config,
+  };
+}
+
+function buildCredentials(server: FgaServerConfig): ConstructorParameters<typeof OpenFgaClient>[0]["credentials"] {
+  return buildCredentialsFromAuth(server.auth);
 }
 
 export async function createOpenFgaClientForServer(server: FgaServerConfig): Promise<OpenFgaClientType> {

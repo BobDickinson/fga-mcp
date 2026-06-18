@@ -15,7 +15,7 @@ vi.mock("../../src/server-pool.js", async (importOriginal) => {
 });
 
 describe("server management tools", () => {
-  it("lists fixed servers with runtime_connect_enabled false", async () => {
+  it("lists fixed servers with dynamic_connections_enabled false", async () => {
     setOnlineWritableMode();
     const ctx = createMultiServerContext(
       {
@@ -27,7 +27,7 @@ describe("server management tools", () => {
 
     const result = await serverManagement.listServers(ctx);
     expect(result).toEqual({
-      runtime_connect_enabled: false,
+      dynamic_connections_enabled: false,
       servers: expect.arrayContaining([
         expect.objectContaining({ name: "dev", default: true, fixed: true }),
         expect.objectContaining({ name: "prod", default: false, fixed: true }),
@@ -35,11 +35,11 @@ describe("server management tools", () => {
     });
   });
 
-  it("lists empty fixed servers with runtime_connect_enabled when dynamic-only", async () => {
+  it("lists empty fixed servers with dynamic_connections_enabled when dynamic-only", async () => {
     const ctx = createDynamicContext();
     const result = await serverManagement.listServers(ctx);
     expect(result).toEqual({
-      runtime_connect_enabled: true,
+      dynamic_connections_enabled: true,
       servers: [],
     });
   });
@@ -83,10 +83,10 @@ describe("server management tools", () => {
   });
 
   it("rejects connect when runtime connect is disabled", async () => {
-    const ctx = createDynamicContext({ allowRuntimeConnect: false, fixedClients: { dev: {} } });
+    const ctx = createDynamicContext({ allowDynamicConnect: false, fixedClients: { dev: {} } });
     ctx.dynamicStore = null;
     const result = await serverManagement.connectServer(ctx, { api_url: "http://127.0.0.1:8080" });
-    expect(result).toContain("Runtime connect is disabled");
+    expect(result).toContain("Dynamic connections are disabled");
   });
 
   it("lists fixed and dynamic servers when connection_scope is passed", async () => {
@@ -99,7 +99,7 @@ describe("server management tools", () => {
 
     const result = await serverManagement.listServers(ctx, connected.connection_scope as string);
     expect(result).toMatchObject({
-      runtime_connect_enabled: true,
+      dynamic_connections_enabled: true,
       connection_scope: connected.connection_scope,
       servers: expect.arrayContaining([
         expect.objectContaining({ name: "dev", fixed: true }),
@@ -120,7 +120,7 @@ describe("server management tools", () => {
     if (typeof connected === "string") throw new Error(connected);
     const result = await serverManagement.listServers(ctx, connected.connection_scope as string);
     expect(result).toMatchObject({
-      runtime_connect_enabled: true,
+      dynamic_connections_enabled: true,
       connection_scope: connected.connection_scope,
       servers: [expect.objectContaining({ name: "dev", fixed: false, default: true })],
     });

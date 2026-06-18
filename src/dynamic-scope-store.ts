@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { OpenFgaClient as OpenFgaClientType } from "@openfga/sdk";
-import type { FgaDefaultsConfig, FgaDynamicConfig, FgaServerConfig } from "./fga-config.js";
+import { buildServerAuth, type FgaDefaultsConfig, type FgaDynamicConfig, type FgaServerConfig } from "./fga-config.js";
 import {
   createOpenFgaClientForServer,
   resolveModelId,
@@ -49,6 +49,7 @@ export type ConnectServerInput = {
   clientSecret?: string;
   issuer?: string;
   audience?: string;
+  scopes?: string;
   label?: string;
   defaultStore?: string;
   defaultModel?: string;
@@ -281,14 +282,19 @@ export class DynamicScopeStore {
     }
 
     const assignment = assignServerName(registry, input.requestedName, input.apiUrl);
+    const auth = buildServerAuth({
+      apiToken: input.apiToken,
+      clientId: input.clientId,
+      clientSecret: input.clientSecret,
+      issuer: input.issuer,
+      audience: input.audience,
+      scopes: input.scopes,
+    });
+
     const profile: FgaServerConfig & { name: string } = {
       name: assignment.name,
       api_url: input.apiUrl.trim(),
-      api_token: input.apiToken,
-      client_id: input.clientId,
-      client_secret: input.clientSecret,
-      issuer: input.issuer,
-      audience: input.audience,
+      auth,
       label: input.label,
       default_store: input.defaultStore,
       default_model: input.defaultModel,
