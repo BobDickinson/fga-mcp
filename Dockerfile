@@ -4,6 +4,8 @@ FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 
 COPY package.json package-lock.json ./
+COPY patches ./patches
+COPY scripts ./scripts
 RUN npm ci
 
 COPY tsconfig.json ./
