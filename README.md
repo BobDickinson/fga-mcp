@@ -10,6 +10,8 @@
 
 Gives agents tools, resources, prompts, and bundled documentation for working with fine-grained authorization — with or without a live OpenFGA server.
 
+> **🎥 Watch the Demo:** Check out the [**fga-mcp Overview and Demo**](https://youtu.be/sgVTOsNAOqw) video to see `fga-mcp` in action.
+
 ## Use cases
 
 - **Plan & design** — Design authorization models using best-practice patterns, prompts, and local DSL validation
