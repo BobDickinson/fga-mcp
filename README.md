@@ -80,18 +80,16 @@ See [Dynamic connection settings](#dynamic-connection-settings) for scope limits
 
 Works with [Cursor](https://cursor.sh), [Claude Desktop](https://claude.ai/download), [Claude Code](https://www.anthropic.com/claude-code), and other MCP clients.
 
-Configuration is passed as **CLI args** (preferred). The same args work for stdio subprocess launch and for running a standalone HTTP server. Environment variables are a fallback when a client cannot pass args — see [Configuration reference](#configuration-reference).
-
 ### 1. Core features
 
-Documentation, prompts, and `verify_model` — no `--config` required:
+Documentation (via tools), prompts, and `verify_model` — no `--config` required:
 
 ```json
 {
   "mcpServers": {
     "OpenFGA": {
       "command": "npx",
-      "args": ["fga-mcp"]
+      "args": ["-y", "fga-mcp"]
     }
   }
 }
@@ -106,22 +104,36 @@ Add `--config` for store, model, and tuple tools (core features remain available
   "mcpServers": {
     "OpenFGA": {
       "command": "npx",
-      "args": ["fga-mcp", "--config", "/absolute/path/to/fga-mcp.json"]
+      "args": ["-y", "fga-mcp", "--config", "/absolute/path/to/fga-mcp.json"]
     }
   }
 }
 ```
 
+A minimal configuration with a single fixed FGA server might look like:
+
+```json
+{
+  "servers": {
+    "dev": {
+      "api_url": "http://127.0.0.1:8080"
+    }
+  }
+}
+```
+
+See [FGA config file](#fga-config-file) for multi-server, auth, dynamic server connections, and policy examples.
+
 > **Safety:** Write operations are disabled by default (`writeable: false`). Set `writeable: true` on a server profile or in `defaults` to allow mutations.
 
-Minimal `fga-mcp.json` — see [FGA config file](#fga-config-file) for multi-server, auth, and policy examples.
+If any server requires credentials and they are not in `fga-mcp.json`, use [§3 HTTP transport](#3-http-transport) instead — [runtime authentication](#how-runtime-authentication-works) needs HTTP to host the authentication page.
 
 ### 3. HTTP transport
 
 Run fga-mcp as a standalone HTTP MCP server (with or without `--config`):
 
 ```bash
-npx fga-mcp --config ./fga-mcp.json --transport http --host 127.0.0.1 --port 9090
+npx -y fga-mcp --config ./fga-mcp.json --transport http --host 127.0.0.1 --port 9090
 ```
 
 MCP endpoint: `http://127.0.0.1:9090/mcp` (streamable HTTP). By default responses stream over this endpoint; use `--no-sse` for JSON-only responses if your client requires it.
@@ -311,6 +323,8 @@ When connected to a live OpenFGA server, argument completion is provided for sto
 
 ## Configuration reference
 
+MCP clients pass runtime settings through the `args` array in client config (preferred). The same flags work for stdio subprocess launch and for running a standalone HTTP server. Environment variables are a fallback when a client cannot pass args.
+
 CLI flags take precedence over environment variables, then defaults. FGA connection settings (`servers`, `defaults`, `allow_dynamic_connections`, …) belong in the **config file**, not on the CLI.
 
 ### CLI flags
@@ -389,7 +403,7 @@ npm run build
 node dist/index.js --config ./fga-mcp.json
 ```
 
-For hot reload, use `tsx` on `src/index.ts` in the MCP client `command` / `args` instead of `npx fga-mcp`.
+For hot reload, use `tsx` on `src/index.ts` in the MCP client `command` / `args` instead of `npx -y fga-mcp`.
 
 ### Docker
 
